@@ -373,8 +373,14 @@ local function StartAH()
     if ahtask then task.cancel(ahtask) ahtask = nil end
     local eggName = Options.EggSelect.Value
     SwitchRemote:FireServer("AutoHatching", true)
-    TeleportToEgg(eggName)
     ahtask = task.spawn(function()
+        -- Wait for character + HumanoidRootPart to exist before teleporting.
+        -- This handles the autoload case where the toggle fires before spawn.
+        repeat task.wait(0.5) until
+            LocalPlayer.Character and
+            LocalPlayer.Character:FindFirstChild("HumanoidRootPart") and
+            LocalPlayer.Character.HumanoidRootPart.Parent
+        TeleportToEgg(eggName)
         while Toggles.ToggleAH.Value do
             local batch = getBatch(eggName)
             if batch then EggRemote:FireServer(eggName, batch)
