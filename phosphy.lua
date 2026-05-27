@@ -6,7 +6,39 @@ local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
 -- Services
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
+local TeleportService = game:GetService("TeleportService")
 local LocalPlayer = Players.LocalPlayer
+
+-- ============================================================
+-- Anti-AFK (no UI)
+-- ============================================================
+local VirtualUser = game:GetService("VirtualUser")
+LocalPlayer.Idled:Connect(function()
+    VirtualUser:CaptureController()
+    VirtualUser:ClickButton2(Vector2.new())
+end)
+
+-- Wait for PlayerData to be ready before anything else
+repeat task.wait(0.1) until
+    LocalPlayer and
+    LocalPlayer.PlayerScripts:FindFirstChild("PlayerData", true)
+
+-- Modules (resolved early so PlayerData.Data is valid for the rest of the script)
+local Modules = ReplicatedStorage:WaitForChild("Game"):WaitForChild("Modules")
+local EggsModule = require(Modules:WaitForChild("Eggs"))
+local PetsModule = require(Modules:WaitForChild("Pets"))
+local SeasonModule = require(Modules:WaitForChild("Season"))
+local Playtime = require(Modules:WaitForChild("Playtime"))
+local Achievements = require(Modules:WaitForChild("Achievements"))
+local Items = require(Modules:WaitForChild("Items"))
+local RebirthsModule = require(Modules:WaitForChild("Rebirths"))
+local UpgradesModule = require(Modules:WaitForChild("Upgrades"))
+local PlayerData = require(LocalPlayer.PlayerScripts:FindFirstChild("PlayerData", true))
+local Format = require(Modules:WaitForChild("Format"))
+local CodesModule = require(Modules:WaitForChild("Codes"))
+
+-- Wait for PlayerData.Data.Items to be populated before building item list
+repeat task.wait(0.1) until PlayerData.Data and PlayerData.Data.Items
 
 -- Remotes
 local Events = ReplicatedStorage:WaitForChild("Game"):WaitForChild("Events")
@@ -22,19 +54,8 @@ local RebirthRemote = Events:WaitForChild("Rebirth")
 local UpgradesRemote = Events:WaitForChild("Upgrades")
 local PetActionRemote = Events:WaitForChild("PetAction")
 local SeasonRemote = Events:WaitForChild("Season")
-
--- Modules
-local Modules = ReplicatedStorage:WaitForChild("Game"):WaitForChild("Modules")
-local EggsModule = require(Modules:WaitForChild("Eggs"))
-local PetsModule = require(Modules:WaitForChild("Pets"))
-local SeasonModule = require(Modules:WaitForChild("Season"))
-local Playtime = require(Modules:WaitForChild("Playtime"))
-local Achievements = require(Modules:WaitForChild("Achievements"))
-local Items = require(Modules:WaitForChild("Items"))
-local RebirthsModule = require(Modules:WaitForChild("Rebirths"))
-local UpgradesModule = require(Modules:WaitForChild("Upgrades"))
-local PlayerData = require(LocalPlayer.PlayerScripts:FindFirstChild("PlayerData", true))
-local Format = require(Modules:WaitForChild("Format"))
+local CodesRemote = Events:WaitForChild("Codes")
+local ItemsRemote = Events:WaitForChild("Items")
 
 local MainUI = LocalPlayer:WaitForChild("PlayerGui"):WaitForChild("MainUI")
 local Rewards = MainUI.Frames.Rewards
@@ -103,6 +124,13 @@ table.sort(CraftPetList)
 local CraftSuccessRates = { "20%", "40%", "60%", "80%", "100%" }
 local CraftSuccessMap = { ["20%"] = 1, ["40%"] = 2, ["60%"] = 3, ["80%"] = 4, ["100%"] = 5 }
 
+-- Build item use list from PlayerData.Data.Items
+local ItemUseList = {}
+for itemName in pairs(PlayerData.Data.Items) do
+    table.insert(ItemUseList, itemName)
+end
+table.sort(ItemUseList)
+
 -- Shop state
 local shopData = {}
 local shopSeed = nil
@@ -153,6 +181,35 @@ local SpinBox = Tabs["Main"]:AddLeftGroupbox("Auto Spin", "rotate-cw")
 AddCheckbox(SpinBox, "ToggleAutoSpin", "Auto Spin")
 AddCheckbox(SpinBox, "ToggleAutoEvilSpin", "Auto Evil Spin")
 
+local AutoUseBox = Tabs["Main"]:AddLeftGroupbox("Auto Use Items", "zap")
+AddDropdown(AutoUseBox, "ItemUseSelect", "Items", ItemUseList, {}, true)
+AddCheckbox(AutoUseBox, "ToggleAutoUseItems", "Auto Use")
+
+-- Codes box
+local CodesBox = Tabs["Main"]:AddLeftGroupbox("Codes", "key")
+CodesBox:AddButton({
+    Text = "Redeem All Codes",
+    Func = function()
+        local codes = CodesModule.Codes or CodesModule
+        local claimed = PlayerData.Data.RedeemedCodes or {}
+        local count = 0
+        for code in pairs(codes) do
+            if not table.find(claimed, code) then
+                CodesRemote:FireServer(code)
+                count = count + 1
+                task.wait(0.25)
+            end
+        end
+        Library:Notify("Attempted " .. count .. " code(s)!")
+    end
+})
+
+-- ============================================================
+-- Misc box (Disable Auto Rejoin)
+-- ============================================================
+local MiscBox = Tabs["Main"]:AddLeftGroupbox("Misc", "shield")
+AddCheckbox(MiscBox, "ToggleDisableAutoRejoin", "Disable Auto Rejoin")
+
 -- RIGHT SIDE
 local UpgradeBox = Tabs["Main"]:AddRightGroupbox("Auto Upgrade", "arrow-up")
 AddDropdown(UpgradeBox, "UpgradeSelect", "Upgrades", UpgradeList, UpgradeDefaultSelected, true)
@@ -160,6 +217,21 @@ AddCheckbox(UpgradeBox, "ToggleAutoUpgrade", "Auto Upgrade")
 task.defer(function()
     Options.UpgradeSelect:SetValue(UpgradeDefaultSelected)
 end)
+
+local MerchantBox = Tabs["Main"]:AddRightGroupbox("Fruit Shop", "shopping-cart")
+AddDropdown(MerchantBox, "MerchantItems", "Items to Buy", MerchantItemList, MerchantDefaultSelected, true)
+AddCheckbox(MerchantBox, "ToggleAutoBuy", "Auto Buy")
+task.defer(function()
+    Options.MerchantItems:SetValue(MerchantDefaultSelected)
+end)
+
+local ClaimBox = Tabs["Main"]:AddRightGroupbox("Auto Claim", "gift")
+AddCheckbox(ClaimBox, "ToggleClaimGifts", "Auto Claim Gifts")
+AddCheckbox(ClaimBox, "ToggleClaimDaily", "Auto Claim Daily")
+AddCheckbox(ClaimBox, "ToggleClaimAchievements", "Auto Claim Achievements")
+AddCheckbox(ClaimBox, "ToggleClaimChests", "Auto Claim Chests")
+AddCheckbox(ClaimBox, "ToggleClaimSeason", "Auto Claim Season")
+AddCheckbox(ClaimBox, "ToggleClaimQuests", "Auto Claim Quests")
 
 -- Pets tab
 local AHBox = Tabs["Pets"]:AddLeftGroupbox("Auto Hatch", "egg")
@@ -178,22 +250,81 @@ AddDropdown(DiamondBox, "DiamondPetSelect", "Pets", CraftPetList, {}, true)
 AddDropdown(DiamondBox, "DiamondSuccessRate", "Success Rate", CraftSuccessRates, "100%", false)
 AddCheckbox(DiamondBox, "ToggleAutoDiamond", "Auto Craft Diamond")
 
-local MerchantBox = Tabs["Main"]:AddRightGroupbox("Fruit Shop", "shopping-cart")
-AddDropdown(MerchantBox, "MerchantItems", "Items to Buy", MerchantItemList, MerchantDefaultSelected, true)
-AddCheckbox(MerchantBox, "ToggleAutoBuy", "Auto Buy")
-task.defer(function()
-    Options.MerchantItems:SetValue(MerchantDefaultSelected)
+-- ============================================================
+-- No Hatch Animation hook
+-- ============================================================
+local _hookRef_fn = nil
+local _hookRef_original = nil
+
+local function InstallNoHatchHook()
+    if _hookRef_fn then return end
+    task.spawn(function()
+        local attempts = 0
+        while not _hookRef_fn and attempts < 200 do
+            attempts = attempts + 1
+            local conns = getconnections(EggRemote.OnClientEvent)
+            for _, conn in pairs(conns) do
+                local ok, ups = pcall(getupvalues, conn.Function)
+                if ok then
+                    for _, v in pairs(ups) do
+                        if type(v) == "table" and v.Unbox then
+                            local original
+                            original = hookfunction(conn.Function, newcclosure(function(eventType, ...)
+                                if eventType == "Unbox" and Toggles.ToggleNoHatchAnim.Value then
+                                    return
+                                end
+                                return original(eventType, ...)
+                            end))
+                            _hookRef_fn = conn.Function
+                            _hookRef_original = original
+                            return
+                        end
+                    end
+                end
+            end
+            task.wait(0.05)
+        end
+    end)
+end
+
+InstallNoHatchHook()
+
+-- ============================================================
+-- Disable Auto Rejoin hook
+-- Hooks TeleportService:Teleport and blocks it while the
+-- checkbox is enabled. Restored on unload or when unchecked.
+-- ============================================================
+local _teleportHookOriginal = nil
+
+local function InstallTeleportBlock()
+    if _teleportHookOriginal then return end -- already hooked
+    _teleportHookOriginal = hookfunction(TeleportService.Teleport, newcclosure(function(self, placeId, ...)
+        -- If the checkbox is on, silently swallow the auto-rejoin teleport
+        if Toggles.ToggleDisableAutoRejoin.Value then
+            return
+        end
+        return _teleportHookOriginal(self, placeId, ...)
+    end))
+end
+
+local function RemoveTeleportBlock()
+    if _teleportHookOriginal then
+        hookfunction(TeleportService.Teleport, _teleportHookOriginal)
+        _teleportHookOriginal = nil
+    end
+end
+
+Toggles.ToggleDisableAutoRejoin:OnChanged(function(state)
+    if state then
+        InstallTeleportBlock()
+    else
+        RemoveTeleportBlock()
+    end
 end)
 
-local ClaimBox = Tabs["Main"]:AddRightGroupbox("Auto Claim", "gift")
-AddCheckbox(ClaimBox, "ToggleClaimGifts", "Auto Claim Gifts")
-AddCheckbox(ClaimBox, "ToggleClaimDaily", "Auto Claim Daily")
-AddCheckbox(ClaimBox, "ToggleClaimAchievements", "Auto Claim Achievements")
-AddCheckbox(ClaimBox, "ToggleClaimChests", "Auto Claim Chests")
-AddCheckbox(ClaimBox, "ToggleClaimSeason", "Auto Claim Season")
-AddCheckbox(ClaimBox, "ToggleClaimQuests", "Auto Claim Quests")
-
+-- ============================================================
 -- LOGIC
+-- ============================================================
 
 -- Batch detection
 local function getBatch(eggName)
@@ -404,6 +535,29 @@ end
 Toggles.ToggleAutoBuy:OnChanged(function(state)
     if state then StartAutoBuy()
     else if autobuytask then task.cancel(autobuytask) autobuytask = nil end end
+end)
+
+-- Auto Use Items
+local autouseitemstask
+local function StartAutoUseItems()
+    if autouseitemstask then task.cancel(autouseitemstask) autouseitemstask = nil end
+    autouseitemstask = task.spawn(function()
+        while Toggles.ToggleAutoUseItems.Value do
+            local selected = Options.ItemUseSelect.Value
+            for itemName in pairs(selected) do
+                local count = (PlayerData.Data.Items and PlayerData.Data.Items[itemName]) or 0
+                if count > 0 then
+                    ItemsRemote:FireServer(itemName)
+                    task.wait(0.3)
+                end
+            end
+            task.wait(2)
+        end
+    end)
+end
+Toggles.ToggleAutoUseItems:OnChanged(function(state)
+    if state then StartAutoUseItems()
+    else if autouseitemstask then task.cancel(autouseitemstask) autouseitemstask = nil end end
 end)
 
 -- Auto Claim Gifts
@@ -631,35 +785,18 @@ Toggles.ToggleClaimQuests:OnChanged(function(state)
     else if claimquesttask then task.cancel(claimquesttask) claimquesttask = nil end end
 end)
 
--- No Hatch Animation
--- Hook the OnClientEvent handler directly so all batch sizes (1/3/8) are covered.
--- Hooking v.Unbox in the module table misses 8-egg batches due to table method resolution.
-local eggEventConnFn = nil
-local eggEventOriginal = nil
-task.defer(function()
-    for _, conn in pairs(getconnections(EggRemote.OnClientEvent)) do
-        local ups = getupvalues(conn.Function)
-        for _, v in pairs(ups) do
-            if type(v) == "table" and v.Unbox then
-                local originalFn
-                originalFn = hookfunction(conn.Function, newcclosure(function(eventType, ...)
-                    if eventType == "Unbox" and Toggles.ToggleNoHatchAnim.Value then return end
-                    return originalFn(eventType, ...)
-                end))
-                eggEventConnFn = conn.Function
-                eggEventOriginal = originalFn
-                print("Egg event hook installed")
-                break
-            end
-        end
-    end
-end)
-
 -- Unload cleanup
 Library:OnUnload(function()
-    if unboxTable and unboxOriginal then
-        hookfunction(unboxTable.Unbox, unboxOriginal)
+    -- Restore egg animation hook
+    if _hookRef_fn and _hookRef_original then
+        hookfunction(_hookRef_fn, _hookRef_original)
+        _hookRef_fn = nil
+        _hookRef_original = nil
     end
+
+    -- Restore teleport hook
+    RemoveTeleportBlock()
+
     if actask then task.cancel(actask) actask = nil end
     if ahtask then task.cancel(ahtask) ahtask = nil end
     if autorebirththask then task.cancel(autorebirththask) autorebirththask = nil end
@@ -668,6 +805,7 @@ Library:OnUnload(function()
     if autoupgradetask then task.cancel(autoupgradetask) autoupgradetask = nil end
     if autoequiptask then task.cancel(autoequiptask) autoequiptask = nil end
     if autobuytask then task.cancel(autobuytask) autobuytask = nil end
+    if autouseitemstask then task.cancel(autouseitemstask) autouseitemstask = nil end
     if claimgiftstask then task.cancel(claimgiftstask) claimgiftstask = nil end
     if claimdailytask then task.cancel(claimdailytask) claimdailytask = nil end
     if claimachtask then task.cancel(claimachtask) claimachtask = nil end
