@@ -64,7 +64,9 @@ local TapSkinsRemote  = Events:WaitForChild("TapSkins")
 local MainUI  = LocalPlayer:WaitForChild("PlayerGui"):WaitForChild("MainUI")
 local Rewards = MainUI.Frames.Rewards
 
--- Build egg list
+-- ============================================================
+-- Build egg list (excluding Robux eggs from auto hatch)
+-- ============================================================
 local EggList = {}
 for name, data in pairs(EggsModule.Eggs) do
     if data.Currency ~= "Robux" then
@@ -73,7 +75,32 @@ for name, data in pairs(EggsModule.Eggs) do
 end
 table.sort(EggList)
 
+-- ============================================================
+-- Dynamic egg progression order
+-- ============================================================
+local function BuildEggProgressionOrder()
+    local clicksEggs = {}
+    local robuxEggs  = {}
+    for name, data in pairs(EggsModule.Eggs) do
+        if data.Currency == "Robux" then
+            table.insert(robuxEggs, { name = name, price = data.Price or 0 })
+        else
+            table.insert(clicksEggs, { name = name, price = data.Price or 0 })
+        end
+    end
+    table.sort(clicksEggs, function(a, b) return a.price < b.price end)
+    table.sort(robuxEggs,  function(a, b) return a.price < b.price end)
+    local order = {}
+    for _, entry in ipairs(clicksEggs) do table.insert(order, entry.name) end
+    for _, entry in ipairs(robuxEggs)  do table.insert(order, entry.name) end
+    return order
+end
+
+local EggProgressionOrder = BuildEggProgressionOrder()
+
+-- ============================================================
 -- Build merchant item list
+-- ============================================================
 local MerchantItemList = {}
 for itemName in pairs(Items.Items) do
     table.insert(MerchantItemList, itemName)
@@ -149,6 +176,16 @@ for name in pairs(TapSkinsModule.TapSkins) do
 end
 table.sort(TapSkinList)
 
+-- Build full pet name list (for auto-delete ignore dropdown)
+local AllPetNamesList = {}
+for name in pairs(PetsModule.Pets) do
+    table.insert(AllPetNamesList, name)
+end
+table.sort(AllPetNamesList)
+
+-- Rarity list (used in multiple dropdowns)
+local RarityList = { "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Exclusive", "Secret", "Celestial" }
+
 -- Shop state
 local shopData = {}
 local shopSeed = nil
@@ -210,9 +247,9 @@ local CodesBox = Tabs["Main"]:AddLeftGroupbox("Codes", "key")
 CodesBox:AddButton({
     Text = "Redeem All Codes",
     Func = function()
-        local codes  = CodesModule.Codes or CodesModule
+        local codes   = CodesModule.Codes or CodesModule
         local claimed = PlayerData.Data.RedeemedCodes or {}
-        local count  = 0
+        local count   = 0
         for code in pairs(codes) do
             if not table.find(claimed, code) then
                 CodesRemote:FireServer(code)
@@ -253,22 +290,54 @@ AddCheckbox(ClaimBox, "ToggleClaimChests",        "Auto Claim Chests")
 AddCheckbox(ClaimBox, "ToggleClaimSeason",        "Auto Claim Season")
 AddCheckbox(ClaimBox, "ToggleClaimQuests",        "Auto Claim Quests")
 
+local AurasBox = Tabs["Main"]:AddRightGroupbox("Auto Auras", "zap")
+AddDropdown(AurasBox, "AuraSelect", "Auras to Buy", AuraList, {}, true)
+AddCheckbox(AurasBox, "ToggleAutoBuyAuras",      "Auto Buy Auras")
+AddCheckbox(AurasBox, "ToggleAutoEquipBestAura", "Auto Equip Best Aura")
+
+local TapSkinsBox = Tabs["Main"]:AddRightGroupbox("Auto TapSkins", "mouse-pointer")
+AddDropdown(TapSkinsBox, "TapSkinSelect", "Skins to Buy", TapSkinList, {}, true)
+AddCheckbox(TapSkinsBox, "ToggleAutoBuyTapSkins",      "Auto Buy TapSkins")
+AddCheckbox(TapSkinsBox, "ToggleAutoEquipBestTapSkin", "Auto Equip Best TapSkin")
+
 -- ============================================================
--- PETS TAB
+-- PETS TAB – LEFT SIDE
 -- ============================================================
 local AHBox = Tabs["Pets"]:AddLeftGroupbox("Auto Hatch", "egg")
 AddDropdown(AHBox, "EggSelect", "Egg", EggList, EggList[1], false)
-AddCheckbox(AHBox, "ToggleAH",             "Toggle Auto Hatch")
-AddCheckbox(AHBox, "ToggleAutoEquipBest",  "Auto Equip Best")
-AddCheckbox(AHBox, "ToggleNoHatchAnim",    "No Hatch Animation")
+AddCheckbox(AHBox, "ToggleAH",            "Toggle Auto Hatch")
+AddCheckbox(AHBox, "ToggleAutoEquipBest", "Auto Equip Best")
+AddCheckbox(AHBox, "ToggleNoHatchAnim",   "No Hatch Animation")
+
+-- Index Status display (left side, above Auto Index)
+local IndexStatusBox   = Tabs["Pets"]:AddLeftGroupbox("Index Status", "compass")
+local IndexStatusImage = IndexStatusBox:AddImage("IndexStatusImage", {
+    Image                = "rbxassetid://0",
+    Height               = 130,
+    BackgroundTransparency = 1,
+    ScaleType            = Enum.ScaleType.Fit,
+})
+local IndexLabelPet    = IndexStatusBox:AddLabel({ Text = "Pet: —",      DoesWrap = false })
+local IndexLabelEgg    = IndexStatusBox:AddLabel({ Text = "Egg: —",      DoesWrap = false })
+local IndexLabelRarity = IndexStatusBox:AddLabel({ Text = "Rarity: —",   DoesWrap = false })
+local IndexLabelStage  = IndexStatusBox:AddLabel({ Text = "Stage: Idle", DoesWrap = false })
+
+-- Auto Index (left side, below Index Status)
+local AutoIndexBox = Tabs["Pets"]:AddLeftGroupbox("Auto Index", "search")
+AddDropdown(AutoIndexBox, "IndexRaritySelect",   "Target Rarities",            RarityList,             {}, true)
+AddDropdown(AutoIndexBox, "IndexIgnoreEggs",     "Ignore Eggs",                EggList,                {}, true)
+AddDropdown(AutoIndexBox, "IndexCraftVariants",  "Craft Variants",             {"Golden", "Diamond"},  {}, true)
+AddDropdown(AutoIndexBox, "IndexDeleteRarities", "Auto Delete Rarities",       RarityList,             {}, true)
+AddDropdown(AutoIndexBox, "IndexIgnorePets",     "Ignore Pets (never delete)", AllPetNamesList,        {}, true)
+AddCheckbox(AutoIndexBox, "ToggleAutoIndex",     "Auto Index")
 
 -- ============================================================
--- PETS TAB – Webhook
+-- PETS TAB – RIGHT SIDE
 -- ============================================================
-local RarityList = { "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Exclusive", "Secret", "Celestial" }
+
+-- Webhook box
+local WebhookBox = Tabs["Pets"]:AddRightGroupbox("Webhook", "bell")
 local PingTypes  = { "None", "User", "Role" }
-
-local WebhookBox = Tabs["Pets"]:AddLeftGroupbox("Webhook", "bell")
 WebhookBox:AddInput("WebhookURL",    { Text = "Webhook URL", Placeholder = "discord.com/api/webhooks/..." })
 WebhookBox:AddInput("WebhookPingID", { Text = "Ping ID",     Placeholder = "User or Role ID" })
 AddDropdown(WebhookBox, "WebhookPingType",       "Ping Type",       PingTypes,  "None", false)
@@ -287,15 +356,43 @@ AddDropdown(DiamondBox, "DiamondSuccessRate", "Success Rate", CraftSuccessRates,
 AddCheckbox(DiamondBox, "ToggleAutoDiamond",  "Auto Craft Diamond")
 
 -- ============================================================
--- MAIN TAB – Auras + TapSkins
+-- Index Status helper
 -- ============================================================
-local AurasBox = Tabs["Main"]:AddRightGroupbox("Auto Auras", "zap")
-AddDropdown(AurasBox, "AuraSelect", "Auras to Buy", AuraList, {}, true)
-AddCheckbox(AurasBox, "ToggleAutoBuyAuras", "Auto Buy Auras")
+local function UpdateIndexStatus(target)
+    if not target then
+        IndexStatusImage:SetImage("rbxassetid://0")
+        IndexLabelPet:SetText("Pet: —")
+        IndexLabelEgg:SetText("Egg: —")
+        IndexLabelRarity:SetText("Rarity: —")
+        IndexLabelStage:SetText("Stage: Idle")
+        return
+    end
 
-local TapSkinsBox = Tabs["Main"]:AddRightGroupbox("Auto TapSkins", "mouse-pointer")
-AddDropdown(TapSkinsBox, "TapSkinSelect", "Skins to Buy", TapSkinList, {}, true)
-AddCheckbox(TapSkinsBox, "ToggleAutoBuyTapSkins", "Auto Buy TapSkins")
+    local petData = PetsModule.Pets[target.pet]
+    if petData and petData.IDs then
+        local assetId = petData.IDs[target.variant] or petData.IDs["Normal"]
+        if assetId then
+            IndexStatusImage:SetImage(assetId)
+        end
+    end
+
+    local rarity = petData and petData.Rarity or "?"
+    IndexLabelPet:SetText("Pet: "    .. target.pet)
+    IndexLabelEgg:SetText("Egg: "    .. target.egg)
+    IndexLabelRarity:SetText("Rarity: " .. rarity)
+
+    local stageText
+    if target.variant == "Normal" then
+        stageText = "Hatching Normal"
+    elseif target.variant == "Golden" then
+        stageText = "Crafting Golden"
+    elseif target.variant == "Diamond" then
+        stageText = "Crafting Diamond"
+    else
+        stageText = target.variant
+    end
+    IndexLabelStage:SetText("Stage: " .. stageText)
+end
 
 -- ============================================================
 -- No Hatch Animation hook
@@ -344,9 +441,7 @@ local _teleportHookOriginal = nil
 local function InstallTeleportBlock()
     if _teleportHookOriginal then return end
     _teleportHookOriginal = hookfunction(TeleportService.Teleport, newcclosure(function(self, placeId, ...)
-        if Toggles.ToggleDisableAutoRejoin.Value then
-            return
-        end
+        if Toggles.ToggleDisableAutoRejoin.Value then return end
         return _teleportHookOriginal(self, placeId, ...)
     end))
 end
@@ -364,24 +459,35 @@ Toggles.ToggleDisableAutoRejoin:OnChanged(function(state)
 end)
 
 -- ============================================================
--- LOGIC
+-- SHARED HELPERS
 -- ============================================================
 
 local function getBatch(eggName)
-    local eggData      = EggsModule.Eggs[eggName]
+    local eggData = EggsModule.Eggs[eggName]
     if not eggData then return nil end
-    local price        = eggData.Price
-    local currency     = eggData.Currency
+    local price          = eggData.Price
+    local currency       = eggData.Currency
     local currencyAmount = PlayerData.Data[currency] or 0
-    local petCount     = #LocalPlayer.Pets:GetChildren()
-    local maxStorage   = PlayerData.Data.MaxStorage or 0
-    local hasPass      = table.find(PlayerData.Data.Passes, "x8EggsHatch") ~= nil
+    local petCount       = #LocalPlayer.Pets:GetChildren()
+    local maxStorage     = PlayerData.Data.MaxStorage or 0
+    local hasPass        = table.find(PlayerData.Data.Passes, "x8EggsHatch") ~= nil
     if hasPass and price * 8 <= currencyAmount and petCount + 8 <= maxStorage then return "Q"
     elseif price * 3 <= currencyAmount and petCount + 3 <= maxStorage then return "R"
     elseif price <= currencyAmount and petCount + 1 <= maxStorage then return "E"
     end
     return nil
 end
+
+local function TeleportToEgg(eggName)
+    local egg = workspace.Game.Eggs:FindFirstChild(eggName)
+    if not egg or not LocalPlayer.Character then return end
+    local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if hrp then hrp.CFrame = egg:GetPivot() + Vector3.new(0, 5, 0) end
+end
+
+-- ============================================================
+-- LOGIC
+-- ============================================================
 
 -- Auto Clicker
 local actask
@@ -398,13 +504,6 @@ Toggles.ToggleAC:OnChanged(function(state)
     if state then StartAC()
     else if actask then task.cancel(actask) actask = nil end end
 end)
-
-local function TeleportToEgg(eggName)
-    local egg = workspace.Game.Eggs:FindFirstChild(eggName)
-    if not egg or not LocalPlayer.Character then return end
-    local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if hrp then hrp.CFrame = egg:GetPivot() + Vector3.new(0, 5, 0) end
-end
 
 -- Auto Hatch
 local ahtask
@@ -532,7 +631,7 @@ Toggles.ToggleAutoUpgrade:OnChanged(function(state)
     else if autoupgradetask then task.cancel(autoupgradetask) autoupgradetask = nil end end
 end)
 
--- Auto Equip Best
+-- Auto Equip Best (pets)
 local autoequiptask
 local function StartAutoEquipBest()
     if autoequiptask then task.cancel(autoequiptask) autoequiptask = nil end
@@ -770,11 +869,11 @@ local function StartClaimSeason()
     if claimseasontask then task.cancel(claimseasontask) claimseasontask = nil end
     claimseasontask = task.spawn(function()
         while Toggles.ToggleClaimSeason.Value do
-            local currentSeason   = SeasonModule.CurrentSeason
-            local playerLevel     = PlayerData.Data["SeasonLVL" .. currentSeason]
-            local freeClaimed     = PlayerData.Data["SeasonFreeClaimed" .. currentSeason]
-            local premiumClaimed  = PlayerData.Data["SeasonPremiumClaimed" .. currentSeason]
-            local hasPremium      = PlayerData.Data["PremiumPass" .. currentSeason]
+            local currentSeason  = SeasonModule.CurrentSeason
+            local playerLevel    = PlayerData.Data["SeasonLVL" .. currentSeason]
+            local freeClaimed    = PlayerData.Data["SeasonFreeClaimed" .. currentSeason]
+            local premiumClaimed = PlayerData.Data["SeasonPremiumClaimed" .. currentSeason]
+            local hasPremium     = PlayerData.Data["PremiumPass" .. currentSeason]
             for tier in pairs(SeasonModule.Rewards) do
                 if tier <= playerLevel then
                     if not table.find(freeClaimed, tier) then
@@ -802,9 +901,9 @@ local function StartClaimQuests()
     if claimquesttask then task.cancel(claimquesttask) claimquesttask = nil end
     claimquesttask = task.spawn(function()
         while Toggles.ToggleClaimQuests.Value do
-            local currentSeason  = SeasonModule.CurrentSeason
-            local passQuests     = PlayerData.Data["PassQuests" .. currentSeason]
-            local questsClaimed  = PlayerData.Data["PassQuestsClaimed" .. currentSeason]
+            local currentSeason = SeasonModule.CurrentSeason
+            local passQuests    = PlayerData.Data["PassQuests" .. currentSeason]
+            local questsClaimed = PlayerData.Data["PassQuestsClaimed" .. currentSeason]
             for slotIndex, questKey in pairs(passQuests) do
                 local questData = SeasonModule.Quests[questKey]
                 if questData then
@@ -824,7 +923,24 @@ Toggles.ToggleClaimQuests:OnChanged(function(state)
     else if claimquesttask then task.cancel(claimquesttask) claimquesttask = nil end end
 end)
 
--- Auto Buy Auras
+-- ============================================================
+-- Auto Auras
+-- ============================================================
+
+-- Helper: returns the owned aura with the highest multiplier
+local function GetBestOwnedAura()
+    local bestName, bestMult = nil, -1
+    for _, auraName in ipairs(PlayerData.Data.Auras or {}) do
+        local data = AurasModule.Auras[auraName]
+        if data and (data.Multiplier or 0) > bestMult then
+            bestMult = data.Multiplier
+            bestName = auraName
+        end
+    end
+    return bestName
+end
+
+-- Auto Buy Auras (buy only)
 local autoaurabuytask
 local function StartAutoBuyAuras()
     if autoaurabuytask then task.cancel(autoaurabuytask) autoaurabuytask = nil end
@@ -833,24 +949,12 @@ local function StartAutoBuyAuras()
             local selected = Options.AuraSelect.Value
             for auraName in pairs(selected) do
                 local auraData = AurasModule.Auras[auraName]
-                if auraData then
-                    local owned    = table.find(PlayerData.Data.Auras, auraName) ~= nil
-                    local equipped = PlayerData.Data.AuraEquipped == auraName
-                    if not owned then
-                        local price    = auraData.Price or 0
-                        local currency = auraData.Currency or "Gems"
-                        local balance  = PlayerData.Data[currency] or 0
-                        if balance >= price then
-                            AurasRemote:FireServer("Buy", auraName)
-                            task.wait(0.5)
-                            if PlayerData.Data.AuraEquipped ~= auraName then
-                                AurasRemote:FireServer("Equip", auraName)
-                                task.wait(0.3)
-                            end
-                        end
-                    elseif not equipped then
-                        AurasRemote:FireServer("Equip", auraName)
-                        task.wait(0.3)
+                if auraData and not table.find(PlayerData.Data.Auras, auraName) then
+                    local price    = auraData.Price or 0
+                    local currency = auraData.Currency or "Gems"
+                    if (PlayerData.Data[currency] or 0) >= price then
+                        AurasRemote:FireServer("Buy", auraName)
+                        task.wait(0.5)
                     end
                 end
             end
@@ -863,7 +967,44 @@ Toggles.ToggleAutoBuyAuras:OnChanged(function(state)
     else if autoaurabuytask then task.cancel(autoaurabuytask) autoaurabuytask = nil end end
 end)
 
--- Auto Buy TapSkins
+-- Auto Equip Best Aura
+local autoequipbestauratask
+local function StartAutoEquipBestAura()
+    if autoequipbestauratask then task.cancel(autoequipbestauratask) autoequipbestauratask = nil end
+    autoequipbestauratask = task.spawn(function()
+        while Toggles.ToggleAutoEquipBestAura.Value do
+            local best = GetBestOwnedAura()
+            if best and PlayerData.Data.AuraEquipped ~= best then
+                AurasRemote:FireServer("Equip", best)
+                task.wait(0.5)
+            end
+            task.wait(3)
+        end
+    end)
+end
+Toggles.ToggleAutoEquipBestAura:OnChanged(function(state)
+    if state then StartAutoEquipBestAura()
+    else if autoequipbestauratask then task.cancel(autoequipbestauratask) autoequipbestauratask = nil end end
+end)
+
+-- ============================================================
+-- Auto TapSkins
+-- ============================================================
+
+-- Helper: returns the owned tapskin with the highest multiplier
+local function GetBestOwnedTapSkin()
+    local bestName, bestMult = nil, -1
+    for _, skinName in ipairs(PlayerData.Data.TapSkins or {}) do
+        local data = TapSkinsModule.TapSkins[skinName]
+        if data and (data.Multiplier or 0) > bestMult then
+            bestMult = data.Multiplier
+            bestName = skinName
+        end
+    end
+    return bestName
+end
+
+-- Auto Buy TapSkins (buy only)
 local autotapskinbuytask
 local function StartAutoBuyTapSkins()
     if autotapskinbuytask then task.cancel(autotapskinbuytask) autotapskinbuytask = nil end
@@ -872,24 +1013,12 @@ local function StartAutoBuyTapSkins()
             local selected = Options.TapSkinSelect.Value
             for skinName in pairs(selected) do
                 local skinData = TapSkinsModule.TapSkins[skinName]
-                if skinData then
-                    local owned    = table.find(PlayerData.Data.TapSkins, skinName) ~= nil
-                    local equipped = PlayerData.Data.TapEquipped == skinName
-                    if not owned then
-                        local price    = skinData.Price or 0
-                        local currency = skinData.Currency or "Gems"
-                        local balance  = PlayerData.Data[currency] or 0
-                        if balance >= price then
-                            TapSkinsRemote:FireServer("Buy", skinName)
-                            task.wait(0.5)
-                            if PlayerData.Data.TapEquipped ~= skinName then
-                                TapSkinsRemote:FireServer("Equip", skinName)
-                                task.wait(0.3)
-                            end
-                        end
-                    elseif not equipped then
-                        TapSkinsRemote:FireServer("Equip", skinName)
-                        task.wait(0.3)
+                if skinData and not table.find(PlayerData.Data.TapSkins, skinName) then
+                    local price    = skinData.Price or 0
+                    local currency = skinData.Currency or "Gems"
+                    if (PlayerData.Data[currency] or 0) >= price then
+                        TapSkinsRemote:FireServer("Buy", skinName)
+                        task.wait(0.5)
                     end
                 end
             end
@@ -902,16 +1031,235 @@ Toggles.ToggleAutoBuyTapSkins:OnChanged(function(state)
     else if autotapskinbuytask then task.cancel(autotapskinbuytask) autotapskinbuytask = nil end end
 end)
 
+-- Auto Equip Best TapSkin
+local autoequipbesttapskintask
+local function StartAutoEquipBestTapSkin()
+    if autoequipbesttapskintask then task.cancel(autoequipbesttapskintask) autoequipbesttapskintask = nil end
+    autoequipbesttapskintask = task.spawn(function()
+        while Toggles.ToggleAutoEquipBestTapSkin.Value do
+            local best = GetBestOwnedTapSkin()
+            if best and PlayerData.Data.TapEquipped ~= best then
+                TapSkinsRemote:FireServer("Equip", best)
+                task.wait(0.5)
+            end
+            task.wait(3)
+        end
+    end)
+end
+Toggles.ToggleAutoEquipBestTapSkin:OnChanged(function(state)
+    if state then StartAutoEquipBestTapSkin()
+    else if autoequipbesttapskintask then task.cancel(autoequipbesttapskintask) autoequipbesttapskintask = nil end end
+end)
+
+-- ============================================================
+-- AUTO INDEX
+-- ============================================================
+local autoindextask
+
+local function GetIndexed()
+    local indexed = {}
+    for _, entry in ipairs(PlayerData.Data.Index) do
+        indexed[entry] = true
+    end
+    return indexed
+end
+
+local function getNextIndexTarget()
+    local targetRarities = Options.IndexRaritySelect.Value
+    local ignoreEggs     = Options.IndexIgnoreEggs.Value
+    local craftVariants  = Options.IndexCraftVariants.Value
+    local indexed        = GetIndexed()
+
+    for _, eggName in ipairs(EggProgressionOrder) do
+        if ignoreEggs[eggName] then continue end
+
+        local eggData = EggsModule.Eggs[eggName]
+        if not eggData then continue end
+
+        for _, petEntry in ipairs(eggData.Pets) do
+            local petName = petEntry.Name
+            local petData = PetsModule.Pets[petName]
+            if not petData then continue end
+            if not targetRarities[petData.Rarity] then continue end
+
+            if not indexed[petName .. "_Normal"] then
+                return { egg = eggName, pet = petName, variant = "Normal" }
+            end
+            if craftVariants["Golden"] and not indexed[petName .. "_Golden"] then
+                return { egg = eggName, pet = petName, variant = "Golden" }
+            end
+            if craftVariants["Diamond"] and not indexed[petName .. "_Diamond"] then
+                return { egg = eggName, pet = petName, variant = "Diamond" }
+            end
+        end
+    end
+
+    return nil
+end
+
+local function CollectPetIds(petName, petType, limit)
+    local ids = {}
+    for _, pet in pairs(LocalPlayer.Pets:GetChildren()) do
+        if pet.Name == petName
+           and pet:FindFirstChild("PetType")
+           and pet.PetType.Value == petType
+           and pet:FindFirstChild("ID")
+        then
+            table.insert(ids, pet.ID.Value)
+            if limit and #ids >= limit then break end
+        end
+    end
+    return ids
+end
+
+local function StartAutoIndex()
+    if autoindextask then task.cancel(autoindextask) autoindextask = nil end
+
+    autoindextask = task.spawn(function()
+        local lastTargetKey     = nil
+        local deleteTimer       = 0
+        local craftProtectedPet = nil
+
+        while Toggles.ToggleAutoIndex.Value do
+
+            -- Auto Delete
+            local deleteRarities = Options.IndexDeleteRarities.Value
+            local ignorePets     = Options.IndexIgnorePets.Value
+
+            if next(deleteRarities) then
+                deleteTimer = deleteTimer + 0.3
+                if deleteTimer >= 3 then
+                    deleteTimer = 0
+                    local toDelete = {}
+                    for _, pet in pairs(LocalPlayer.Pets:GetChildren()) do
+                        local petName = pet.Name
+                        local petData = PetsModule.Pets[petName]
+                        if petData
+                            and deleteRarities[petData.Rarity]
+                            and petName ~= craftProtectedPet
+                            and not ignorePets[petName]
+                            and pet:FindFirstChild("ID")
+                        then
+                            table.insert(toDelete, pet.ID.Value)
+                        end
+                    end
+                    if #toDelete > 0 then
+                        for i = 1, #toDelete, 100 do
+                            local chunk = {}
+                            for j = i, math.min(i + 99, #toDelete) do
+                                table.insert(chunk, toDelete[j])
+                            end
+                            PetActionRemote:FireServer("Delete", chunk)
+                            task.wait(0.3)
+                        end
+                    end
+                end
+            else
+                deleteTimer = 0
+            end
+
+            local target = getNextIndexTarget()
+
+            if not target then
+                UpdateIndexStatus(nil)
+                craftProtectedPet = nil
+                Library:Notify("Auto Index: All target pets indexed!")
+                Toggles.ToggleAutoIndex:SetValue(false)
+                break
+            end
+
+            craftProtectedPet = target.pet
+
+            local targetKey = target.egg .. "|" .. target.pet .. "|" .. target.variant
+            if targetKey ~= lastTargetKey then
+                lastTargetKey = targetKey
+                UpdateIndexStatus(target)
+                Library:Notify(
+                    "Auto Index: " .. target.pet ..
+                    " [" .. target.variant .. "]" ..
+                    " — " .. target.egg
+                )
+                SwitchRemote:FireServer("AutoHatching", true)
+                TeleportToEgg(target.egg)
+                task.wait(0.5)
+            end
+
+            if target.variant == "Normal" then
+                local batch = getBatch(target.egg)
+                if batch then
+                    EggRemote:FireServer(target.egg, batch)
+                    task.wait(0.3)
+                else
+                    task.wait(1)
+                end
+
+            elseif target.variant == "Golden" then
+                local normalIds = CollectPetIds(target.pet, "Normal", 5)
+                if #normalIds >= 5 then
+                    PetActionRemote:FireServer("GoldenMachine", { normalIds, target.pet })
+                    task.wait(1)
+                else
+                    local batch = getBatch(target.egg)
+                    if batch then
+                        EggRemote:FireServer(target.egg, batch)
+                        task.wait(0.3)
+                    else
+                        task.wait(1)
+                    end
+                end
+
+            elseif target.variant == "Diamond" then
+                local goldenIds = CollectPetIds(target.pet, "Golden", 5)
+                if #goldenIds >= 5 then
+                    PetActionRemote:FireServer("DiamondMachine", { goldenIds, target.pet })
+                    task.wait(1)
+                else
+                    local normalIds = CollectPetIds(target.pet, "Normal", 5)
+                    if #normalIds >= 5 then
+                        PetActionRemote:FireServer("GoldenMachine", { normalIds, target.pet })
+                        task.wait(1)
+                    else
+                        local batch = getBatch(target.egg)
+                        if batch then
+                            EggRemote:FireServer(target.egg, batch)
+                            task.wait(0.3)
+                        else
+                            task.wait(1)
+                        end
+                    end
+                end
+            end
+        end
+
+        craftProtectedPet = nil
+        UpdateIndexStatus(nil)
+        SwitchRemote:FireServer("AutoHatching", false)
+    end)
+end
+
+Toggles.ToggleAutoIndex:OnChanged(function(state)
+    if state then
+        if not next(Options.IndexRaritySelect.Value) then
+            Library:Notify("Auto Index: Select at least one rarity first!")
+            Toggles.ToggleAutoIndex:SetValue(false)
+            return
+        end
+        StartAutoIndex()
+    else
+        if autoindextask then task.cancel(autoindextask) autoindextask = nil end
+        UpdateIndexStatus(nil)
+        SwitchRemote:FireServer("AutoHatching", false)
+    end
+end)
+
 -- ============================================================
 -- WEBHOOK SYSTEM
 -- ============================================================
 
-local EMBED_COLOR = 0x00C8B4  -- rgb(0, 200, 180)
+local EMBED_COLOR = 0x00C8B4
 
 local httpReq = (syn and syn.request) or (http and http.request) or request
 
--- Resolve a Roblox asset ID → real tr.rbxcdn.com URL via roproxy.
--- Retries once if Roblox hasn't finished generating the thumbnail yet.
 local function ResolveAssetURL(assetId, size)
     size = size or "420x420"
     for attempt = 1, 2 do
@@ -924,37 +1272,26 @@ local function ResolveAssetURL(assetId, size)
         local ok2, body = pcall(HttpService.JSONDecode, HttpService, res.Body)
         if not ok2 or not body or not body.data or not body.data[1] then return nil end
         local entry = body.data[1]
-        if entry.state == "Completed" then
-            return entry.imageUrl
-        end
-        -- Roblox is still generating the thumbnail — wait and retry once
+        if entry.state == "Completed" then return entry.imageUrl end
         if attempt == 1 then task.wait(2) end
     end
     return nil
 end
 
--- Resolve the Phosphy UI icon asset.
--- The thumbnails API does not cover all UI image assets, so we also try
--- the assetdelivery v2 endpoint which returns the raw CDN location.
 local function ResolveIconURL(assetId)
     local url = ResolveAssetURL(assetId, "150x150")
     if url then return url end
-
-    -- Fallback: assetdelivery v2 returns JSON with a `location` CDN URL
     local ok, res = pcall(httpReq, {
         Url    = "https://assetdelivery.roproxy.com/v2/assetId/" .. assetId,
         Method = "GET",
     })
     if ok and res and res.StatusCode == 200 then
         local ok2, body = pcall(HttpService.JSONDecode, HttpService, res.Body)
-        if ok2 and body and body.location then
-            return body.location
-        end
+        if ok2 and body and body.location then return body.location end
     end
     return nil
 end
 
--- Resolve player avatar headshot → real tr.rbxcdn.com URL
 local function ResolveAvatarURL(userId)
     local ok, res = pcall(httpReq, {
         Url    = "https://thumbnails.roproxy.com/v1/users/avatar-headshot?userIds=" .. tostring(userId)
@@ -967,8 +1304,6 @@ local function ResolveAvatarURL(userId)
     return body.data[1].imageUrl
 end
 
--- Resolve pet image.
--- 512x512 is the largest valid size roproxy supports; 720x720 causes silent failures.
 local function GetPetImageURL(petName, petType)
     local data = PetsModule.Pets[petName]
     if not data or not data.IDs then return nil end
@@ -977,23 +1312,16 @@ local function GetPetImageURL(petName, petType)
     return ResolveAssetURL(assetId, "512x512")
 end
 
--- Resolve the Phosphy icon once at startup (cached for all webhook posts)
 local PhosphyIconURL = nil
 task.spawn(function()
     PhosphyIconURL = ResolveIconURL("111288992980872")
 end)
 
--- Resolve the local player's avatar once per session (cached)
 local cachedAvatarURL = nil
 task.spawn(function()
     cachedAvatarURL = ResolveAvatarURL(LocalPlayer.UserId)
 end)
 
-local RarityColors = {} -- kept for compatibility but embed always uses EMBED_COLOR
-
--- Build one embed per pet.
--- `image`     = large pet picture at the bottom (not cropped)
--- `thumbnail` = small player headshot in the top-right corner
 local function BuildEmbed(petName, rarity, petType, petImageURL, playerAvatarURL)
     local embed = {
         title  = "🥚  " .. rarity .. " — " .. petName .. " Hatched!",
@@ -1012,7 +1340,6 @@ local function BuildEmbed(petName, rarity, petType, petImageURL, playerAvatarURL
     return embed
 end
 
--- POST to Discord
 local function PostWebhook(url, content, embeds)
     local payload = HttpService:JSONEncode({
         username   = "Phosphy",
@@ -1028,12 +1355,10 @@ local function PostWebhook(url, content, embeds)
     })
 end
 
--- Webhook listener
 local webhookConn = nil
 
 local function InstallWebhookListener()
     if webhookConn then webhookConn:Disconnect() webhookConn = nil end
-
     webhookConn = EggRemote.OnClientEvent:Connect(function(eventType, _, _, pets)
         if eventType ~= "Unbox" then return end
         if not Toggles.ToggleWebhook.Value then return end
@@ -1054,7 +1379,6 @@ local function InstallWebhookListener()
             local notifyRarities = Options.WebhookNotifyRarities.Value
             local pingRarities   = Options.WebhookPingRarities.Value
             local pingEmbeds     = {}
-            local sentThisBatch  = {} -- ← local per event, not global
 
             for _, petInfo in pairs(pets) do
                 local petName = petInfo.PetName
@@ -1086,11 +1410,8 @@ local function InstallWebhookListener()
 end
 
 Toggles.ToggleWebhook:OnChanged(function(state)
-    if state then
-        InstallWebhookListener()
-    else
-        if webhookConn then webhookConn:Disconnect() webhookConn = nil end
-    end
+    if state then InstallWebhookListener()
+    else if webhookConn then webhookConn:Disconnect() webhookConn = nil end end
 end)
 
 -- ============================================================
@@ -1104,31 +1425,37 @@ Library:OnUnload(function()
     end
     RemoveTeleportBlock()
 
-    if actask             then task.cancel(actask)             actask             = nil end
-    if ahtask             then task.cancel(ahtask)             ahtask             = nil end
-    if autorebirththask   then task.cancel(autorebirththask)   autorebirththask   = nil end
-    if autospintask       then task.cancel(autospintask)       autospintask       = nil end
-    if autoevilspintask   then task.cancel(autoevilspintask)   autoevilspintask   = nil end
-    if autoupgradetask    then task.cancel(autoupgradetask)    autoupgradetask    = nil end
-    if autoequiptask      then task.cancel(autoequiptask)      autoequiptask      = nil end
-    if autobuytask        then task.cancel(autobuytask)        autobuytask        = nil end
-    if autouseitemstask   then task.cancel(autouseitemstask)   autouseitemstask   = nil end
-    if claimgiftstask     then task.cancel(claimgiftstask)     claimgiftstask     = nil end
-    if claimdailytask     then task.cancel(claimdailytask)     claimdailytask     = nil end
-    if claimachtask       then task.cancel(claimachtask)       claimachtask       = nil end
-    if claimchesttask     then task.cancel(claimchesttask)     claimchesttask     = nil end
-    if autogoldentask     then task.cancel(autogoldentask)     autogoldentask     = nil end
-    if autodiamondtask    then task.cancel(autodiamondtask)    autodiamondtask    = nil end
-    if claimseasontask    then task.cancel(claimseasontask)    claimseasontask    = nil end
-    if claimquesttask     then task.cancel(claimquesttask)     claimquesttask     = nil end
-    if autoaurabuytask    then task.cancel(autoaurabuytask)    autoaurabuytask    = nil end
-    if autotapskinbuytask then task.cancel(autotapskinbuytask) autotapskinbuytask = nil end
-    if webhookConn        then webhookConn:Disconnect()        webhookConn        = nil end
+    if actask                  then task.cancel(actask)                  actask                  = nil end
+    if ahtask                  then task.cancel(ahtask)                  ahtask                  = nil end
+    if autorebirththask        then task.cancel(autorebirththask)        autorebirththask        = nil end
+    if autospintask            then task.cancel(autospintask)            autospintask            = nil end
+    if autoevilspintask        then task.cancel(autoevilspintask)        autoevilspintask        = nil end
+    if autoupgradetask         then task.cancel(autoupgradetask)         autoupgradetask         = nil end
+    if autoequiptask           then task.cancel(autoequiptask)           autoequiptask           = nil end
+    if autobuytask             then task.cancel(autobuytask)             autobuytask             = nil end
+    if autouseitemstask        then task.cancel(autouseitemstask)        autouseitemstask        = nil end
+    if claimgiftstask          then task.cancel(claimgiftstask)          claimgiftstask          = nil end
+    if claimdailytask          then task.cancel(claimdailytask)          claimdailytask          = nil end
+    if claimachtask            then task.cancel(claimachtask)            claimachtask            = nil end
+    if claimchesttask          then task.cancel(claimchesttask)          claimchesttask          = nil end
+    if autogoldentask          then task.cancel(autogoldentask)          autogoldentask          = nil end
+    if autodiamondtask         then task.cancel(autodiamondtask)         autodiamondtask         = nil end
+    if claimseasontask         then task.cancel(claimseasontask)         claimseasontask         = nil end
+    if claimquesttask          then task.cancel(claimquesttask)          claimquesttask          = nil end
+    if autoaurabuytask         then task.cancel(autoaurabuytask)         autoaurabuytask         = nil end
+    if autoequipbestauratask   then task.cancel(autoequipbestauratask)   autoequipbestauratask   = nil end
+    if autotapskinbuytask      then task.cancel(autotapskinbuytask)      autotapskinbuytask      = nil end
+    if autoequipbesttapskintask then task.cancel(autoequipbesttapskintask) autoequipbesttapskintask = nil end
+    if autoindextask           then task.cancel(autoindextask)           autoindextask           = nil end
+    if webhookConn             then webhookConn:Disconnect()             webhookConn             = nil end
 
+    UpdateIndexStatus(nil)
     SwitchRemote:FireServer("AutoHatching", false)
 end)
 
--- Settings Tab
+-- ============================================================
+-- UI Settings Tab
+-- ============================================================
 local Settings = Tabs["UI Settings"]:AddRightGroupbox("General", "wrench")
 Settings:AddLabel("MenuBind"):AddKeyPicker("MenuKeybind", {
     Default = "RightShift",
