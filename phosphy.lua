@@ -5,10 +5,11 @@ local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
 
 -- Services
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Players = game:GetService("Players")
-local TeleportService = game:GetService("TeleportService")
-local HttpService = game:GetService("HttpService")
-local LocalPlayer = Players.LocalPlayer
+local Players           = game:GetService("Players")
+local TeleportService   = game:GetService("TeleportService")
+local HttpService        = game:GetService("HttpService")
+local RunService         = game:GetService("RunService")
+local LocalPlayer        = Players.LocalPlayer
 
 -- ============================================================
 -- Anti-AFK (no UI)
@@ -43,23 +44,26 @@ local TapSkinsModule   = require(Modules:WaitForChild("TapSkins"))
 repeat task.wait(0.1) until PlayerData.Data and PlayerData.Data.Items
 
 -- Remotes
-local Events          = ReplicatedStorage:WaitForChild("Game"):WaitForChild("Events")
-local ClickRemote     = Events:WaitForChild("Click")
-local SwitchRemote    = Events:WaitForChild("Switch")
-local EggRemote       = Events:WaitForChild("Egg")
-local RewardsRemote   = Events:WaitForChild("Rewards")
-local MerchantRemote  = Events:WaitForChild("Merchant")
-local ChestRemote     = Events:WaitForChild("Chests")
-local SpinRemote      = Events:WaitForChild("Spin")
-local EvilSpinRemote  = Events:WaitForChild("EvilSpin")
-local RebirthRemote   = Events:WaitForChild("Rebirth")
-local UpgradesRemote  = Events:WaitForChild("Upgrades")
-local PetActionRemote = Events:WaitForChild("PetAction")
-local SeasonRemote    = Events:WaitForChild("Season")
-local CodesRemote     = Events:WaitForChild("Codes")
-local ItemsRemote     = Events:WaitForChild("Items")
-local AurasRemote     = Events:WaitForChild("Auras")
-local TapSkinsRemote  = Events:WaitForChild("TapSkins")
+local Events            = ReplicatedStorage:WaitForChild("Game"):WaitForChild("Events")
+local ClickRemote       = Events:WaitForChild("Click")
+local SwitchRemote      = Events:WaitForChild("Switch")
+local EggRemote         = Events:WaitForChild("Egg")
+local RewardsRemote     = Events:WaitForChild("Rewards")
+local MerchantRemote    = Events:WaitForChild("Merchant")
+local ChestRemote       = Events:WaitForChild("Chests")
+local SpinRemote        = Events:WaitForChild("Spin")
+local EvilSpinRemote    = Events:WaitForChild("EvilSpin")
+local RebirthRemote     = Events:WaitForChild("Rebirth")
+local UpgradesRemote    = Events:WaitForChild("Upgrades")
+local PetActionRemote   = Events:WaitForChild("PetAction")
+local SeasonRemote      = Events:WaitForChild("Season")
+local CodesRemote       = Events:WaitForChild("Codes")
+local ItemsRemote       = Events:WaitForChild("Items")
+local AurasRemote       = Events:WaitForChild("Auras")
+local TapSkinsRemote    = Events:WaitForChild("TapSkins")
+local TradeRemote       = Events:WaitForChild("Trade")
+local AdditionalRemote  = Events:WaitForChild("Additional")
+local SettingsRemote    = Events:WaitForChild("Settings")
 
 local MainUI  = LocalPlayer:WaitForChild("PlayerGui"):WaitForChild("MainUI")
 local Rewards = MainUI.Frames.Rewards
@@ -183,8 +187,11 @@ for name in pairs(PetsModule.Pets) do
 end
 table.sort(AllPetNamesList)
 
--- Rarity list (used in multiple dropdowns)
+-- Rarity list
 local RarityList = { "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Exclusive", "Secret", "Celestial" }
+
+-- Settings booleans available in-game
+local GameSettingsList = { "BetterQuality", "Music", "HideOtherPets", "HideAuras" }
 
 -- Shop state
 local shopData = {}
@@ -219,9 +226,10 @@ local Window = Library:CreateWindow({
 })
 
 local Tabs = {
-    Main            = Window:AddTab("Main", "user"),
-    Pets            = Window:AddTab("Pets", "paw-print"),
-    ["UI Settings"] = Window:AddTab("UI Settings", "folder-cog"),
+    Main            = Window:AddTab("Main",         "user"),
+    Pets            = Window:AddTab("Pets",         "paw-print"),
+    Misc            = Window:AddTab("Misc",         "settings"),
+    ["UI Settings"] = Window:AddTab("UI Settings",  "folder-cog"),
 }
 
 -- ============================================================
@@ -235,35 +243,12 @@ AddDropdown(ARBox, "RebirthTier", "Tier", RebirthTiers, RebirthTiers[1], false)
 AddCheckbox(ARBox, "ToggleAutoRebirth", "Auto Rebirth")
 
 local SpinBox = Tabs["Main"]:AddLeftGroupbox("Auto Spin", "rotate-cw")
-AddCheckbox(SpinBox, "ToggleAutoSpin", "Auto Spin")
+AddCheckbox(SpinBox, "ToggleAutoSpin",     "Auto Spin")
 AddCheckbox(SpinBox, "ToggleAutoEvilSpin", "Auto Evil Spin")
 
 local AutoUseBox = Tabs["Main"]:AddLeftGroupbox("Auto Use Items", "zap")
 AddDropdown(AutoUseBox, "ItemUseSelect", "Items", ItemUseList, {}, true)
 AddCheckbox(AutoUseBox, "ToggleAutoUseItems", "Auto Use")
-
--- Codes box
-local CodesBox = Tabs["Main"]:AddLeftGroupbox("Codes", "key")
-CodesBox:AddButton({
-    Text = "Redeem All Codes",
-    Func = function()
-        local codes   = CodesModule.Codes or CodesModule
-        local claimed = PlayerData.Data.RedeemedCodes or {}
-        local count   = 0
-        for code in pairs(codes) do
-            if not table.find(claimed, code) then
-                CodesRemote:FireServer(code)
-                count = count + 1
-                task.wait(0.25)
-            end
-        end
-        Library:Notify("Attempted " .. count .. " code(s)!")
-    end
-})
-
--- Misc box
-local MiscBox = Tabs["Main"]:AddLeftGroupbox("Misc", "shield")
-AddCheckbox(MiscBox, "ToggleDisableAutoRejoin", "Disable Auto Rejoin")
 
 -- ============================================================
 -- MAIN TAB – RIGHT SIDE
@@ -309,42 +294,34 @@ AddCheckbox(AHBox, "ToggleAH",            "Toggle Auto Hatch")
 AddCheckbox(AHBox, "ToggleAutoEquipBest", "Auto Equip Best")
 AddCheckbox(AHBox, "ToggleNoHatchAnim",   "No Hatch Animation")
 
--- Index Status display (left side, above Auto Index)
+-- Index Status display
 local IndexStatusBox   = Tabs["Pets"]:AddLeftGroupbox("Index Status", "compass")
 local IndexStatusImage = IndexStatusBox:AddImage("IndexStatusImage", {
-    Image                = "rbxassetid://0",
-    Height               = 130,
+    Image                  = "rbxassetid://0",
+    Height                 = 130,
     BackgroundTransparency = 1,
-    ScaleType            = Enum.ScaleType.Fit,
+    ScaleType              = Enum.ScaleType.Fit,
 })
-local IndexLabelPet    = IndexStatusBox:AddLabel({ Text = "Pet: —",      DoesWrap = false })
-local IndexLabelEgg    = IndexStatusBox:AddLabel({ Text = "Egg: —",      DoesWrap = false })
-local IndexLabelRarity = IndexStatusBox:AddLabel({ Text = "Rarity: —",   DoesWrap = false })
-local IndexLabelStage  = IndexStatusBox:AddLabel({ Text = "Stage: Idle", DoesWrap = false })
+local IndexLabelPet      = IndexStatusBox:AddLabel({ Text = "Pet: —",      DoesWrap = false })
+local IndexLabelEgg      = IndexStatusBox:AddLabel({ Text = "Egg: —",      DoesWrap = false })
+local IndexLabelRarity   = IndexStatusBox:AddLabel({ Text = "Rarity: —",   DoesWrap = false })
+local IndexLabelStage    = IndexStatusBox:AddLabel({ Text = "Stage: Idle", DoesWrap = false })
+local IndexLabelProgress = IndexStatusBox:AddLabel({ Text = "Progress: —", DoesWrap = false })
 
--- Auto Index (left side, below Index Status)
+-- Auto Index
 local AutoIndexBox = Tabs["Pets"]:AddLeftGroupbox("Auto Index", "search")
-AddDropdown(AutoIndexBox, "IndexRaritySelect",   "Target Rarities",            RarityList,             {}, true)
-AddDropdown(AutoIndexBox, "IndexIgnoreEggs",     "Ignore Eggs",                EggList,                {}, true)
-AddDropdown(AutoIndexBox, "IndexCraftVariants",  "Craft Variants",             {"Golden", "Diamond"},  {}, true)
-AddDropdown(AutoIndexBox, "IndexDeleteRarities", "Auto Delete Rarities",       RarityList,             {}, true)
-AddDropdown(AutoIndexBox, "IndexIgnorePets",     "Ignore Pets (never delete)", AllPetNamesList,        {}, true)
+AddDropdown(AutoIndexBox, "IndexRaritySelect",   "Target Rarities",            RarityList,            {}, true)
+AddDropdown(AutoIndexBox, "IndexIgnoreEggs",     "Ignore Eggs",                EggList,               {}, true)
+AddDropdown(AutoIndexBox, "IndexCraftVariants",  "Craft Variants",             {"Golden", "Diamond"}, {}, true)
+AutoIndexBox:AddLabel({ Text = "Auto Delete runs only while Auto Index is ON.", DoesWrap = true })
+AddDropdown(AutoIndexBox, "IndexDeleteRarities", "Delete Rarities",            RarityList,            {}, true)
+AddDropdown(AutoIndexBox, "IndexIgnorePets",     "Never Delete Pets",          AllPetNamesList,       {}, true)
+AddCheckbox(AutoIndexBox, "ToggleAutoClaimIndexReward", "Auto Claim Index Reward")
 AddCheckbox(AutoIndexBox, "ToggleAutoIndex",     "Auto Index")
 
 -- ============================================================
 -- PETS TAB – RIGHT SIDE
 -- ============================================================
-
--- Webhook box
-local WebhookBox = Tabs["Pets"]:AddRightGroupbox("Webhook", "bell")
-local PingTypes  = { "None", "User", "Role" }
-WebhookBox:AddInput("WebhookURL",    { Text = "Webhook URL", Placeholder = "discord.com/api/webhooks/..." })
-WebhookBox:AddInput("WebhookPingID", { Text = "Ping ID",     Placeholder = "User or Role ID" })
-AddDropdown(WebhookBox, "WebhookPingType",       "Ping Type",       PingTypes,  "None", false)
-AddDropdown(WebhookBox, "WebhookNotifyRarities", "Notify Rarities", RarityList, {}, true)
-AddDropdown(WebhookBox, "WebhookPingRarities",   "Ping Rarities",   RarityList, {}, true)
-AddCheckbox(WebhookBox, "ToggleWebhook", "Enable Webhook")
-
 local GoldenBox = Tabs["Pets"]:AddRightGroupbox("Golden Machine", "star")
 AddDropdown(GoldenBox, "GoldenPetSelect",   "Pets", CraftPetList, {}, true)
 AddDropdown(GoldenBox, "GoldenSuccessRate", "Success Rate", CraftSuccessRates, "100%", false)
@@ -356,6 +333,255 @@ AddDropdown(DiamondBox, "DiamondSuccessRate", "Success Rate", CraftSuccessRates,
 AddCheckbox(DiamondBox, "ToggleAutoDiamond",  "Auto Craft Diamond")
 
 -- ============================================================
+-- SHARED HELPERS (defined early so Tutorial button can use them)
+-- ============================================================
+
+local function TeleportToEgg(eggName)
+    local egg = workspace.Game.Eggs:FindFirstChild(eggName)
+    if not egg or not LocalPlayer.Character then return end
+    local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if hrp then hrp.CFrame = egg:GetPivot() + Vector3.new(0, 5, 0) end
+end
+
+local function getBatch(eggName)
+    local eggData = EggsModule.Eggs[eggName]
+    if not eggData then return nil end
+    local price          = eggData.Price
+    local currency       = eggData.Currency
+    local currencyAmount = PlayerData.Data[currency] or 0
+    local petCount       = #LocalPlayer.Pets:GetChildren()
+    local maxStorage     = PlayerData.Data.MaxStorage or 0
+    local hasPass        = table.find(PlayerData.Data.Passes, "x8EggsHatch") ~= nil
+    if hasPass and price * 8 <= currencyAmount and petCount + 8 <= maxStorage then return "Q"
+    elseif price * 3 <= currencyAmount and petCount + 3 <= maxStorage then return "R"
+    elseif price <= currencyAmount and petCount + 1 <= maxStorage then return "E"
+    end
+    return nil
+end
+
+-- Parse comma-separated username string into a trimmed list
+local function ParseUsernames(raw)
+    local names = {}
+    for name in (raw or ""):gmatch("[^,]+") do
+        local trimmed = name:match("^%s*(.-)%s*$")
+        if trimmed ~= "" then
+            table.insert(names, trimmed)
+        end
+    end
+    return names
+end
+
+-- ============================================================
+-- MISC TAB – LEFT SIDE
+-- ============================================================
+
+-- Tutorial
+local TutorialBox = Tabs["Misc"]:AddLeftGroupbox("Tutorial", "book-open")
+TutorialBox:AddLabel({ Text = "Walks through all 5 stages then loads your config.", DoesWrap = true })
+
+local function GetConfigList()
+    local list = { "None" }
+    local ok, result = pcall(function() return SaveManager:RefreshConfigList() end)
+    if ok and result then
+        for _, name in ipairs(result) do
+            table.insert(list, name)
+        end
+    end
+    return list
+end
+
+AddDropdown(TutorialBox, "TutorialLoadConfig", "Load Config After", GetConfigList(), "None", false)
+
+TutorialBox:AddButton({
+    Text = "Refresh Config List",
+    Func = function()
+        local fresh = GetConfigList()
+        Options.TutorialLoadConfig:SetValues(fresh)
+        local current = Options.TutorialLoadConfig.Value
+        if not table.find(fresh, current) then
+            Options.TutorialLoadConfig:SetValue("None")
+        end
+        Library:Notify("Config list refreshed! (" .. (#fresh - 1) .. " found)")
+    end
+})
+
+TutorialBox:AddButton({
+    Text = "Auto Complete Tutorial",
+    Func = function()
+        -- Auto-refresh config list
+        local fresh = GetConfigList()
+        Options.TutorialLoadConfig:SetValues(fresh)
+        local current = Options.TutorialLoadConfig.Value
+        if not table.find(fresh, current) then
+            Options.TutorialLoadConfig:SetValue("None")
+        end
+
+        local stage = PlayerData.Data and PlayerData.Data.TutorialStage or 0
+
+        if stage >= 6 then
+            Library:Notify("Tutorial already complete! (Stage " .. stage .. ")")
+            return
+        end
+
+        Library:Notify("Auto Tutorial: Starting from stage " .. stage .. "...")
+
+        task.spawn(function()
+            -- ── Stage 1 → 2: need 50 clicks ──────────────────────
+            if (PlayerData.Data.TutorialStage or 0) <= 1 then
+                Library:Notify("Auto Tutorial: Stage 1 — clicking 50x...")
+                for _ = 1, 80 do
+                    ClickRemote:FireServer()
+                    task.wait(0.1)
+                end
+                local waited = 0
+                repeat task.wait(0.2) waited += 0.2
+                until (PlayerData.Data.TutorialStage or 0) >= 2 or waited >= 8
+            end
+
+            -- ── Stage 2 → 3: teleport to Starter egg then hatch 1 ─
+            if (PlayerData.Data.TutorialStage or 0) <= 2 then
+                Library:Notify("Auto Tutorial: Stage 2 — hatching Starter egg...")
+                TeleportToEgg("Starter")
+                task.wait(0.5)
+                EggRemote:FireServer("Starter", "E")
+                task.wait(1)
+                PetActionRemote:FireServer("Equip Best")
+                task.wait(0.5)
+                local waited = 0
+                repeat task.wait(0.2) waited += 0.2
+                until (PlayerData.Data.TutorialStage or 0) >= 3 or waited >= 8
+            end
+
+            -- ── Stage 3 → 4: equip a pet ─────────────────────────
+            if (PlayerData.Data.TutorialStage or 0) <= 3 then
+                Library:Notify("Auto Tutorial: Stage 3 — equipping pet...")
+                PetActionRemote:FireServer("Equip Best")
+                task.wait(0.5)
+                local waited = 0
+                repeat task.wait(0.2) waited += 0.2
+                until (PlayerData.Data.TutorialStage or 0) >= 4 or waited >= 8
+            end
+
+            -- ── Stage 4 → 5: rebirth ─────────────────────────────
+            if (PlayerData.Data.TutorialStage or 0) <= 4 then
+                Library:Notify("Auto Tutorial: Stage 4 — clicking for rebirth...")
+                for _ = 1, 120 do
+                    ClickRemote:FireServer()
+                    task.wait(0.05)
+                end
+                RebirthRemote:FireServer(1)
+                task.wait(1)
+                local waited = 0
+                repeat task.wait(0.2) waited += 0.2
+                until (PlayerData.Data.TutorialStage or 0) >= 5 or waited >= 8
+            end
+
+            -- ── Stage 5 → 6: TutorialEnd ─────────────────────────
+            if (PlayerData.Data.TutorialStage or 0) <= 5 then
+                Library:Notify("Auto Tutorial: Stage 5 — finishing...")
+                AdditionalRemote:FireServer("TutorialEnd")
+                task.wait(1)
+            end
+
+            -- ── Result ────────────────────────────────────────────
+            local final = PlayerData.Data.TutorialStage or 0
+            if final >= 6 then
+                Library:Notify("✅ Tutorial complete!")
+                local configName = Options.TutorialLoadConfig.Value
+                if configName and configName ~= "None" then
+                    task.wait(0.5)
+                    local ok, err = SaveManager:Load(configName)
+                    if ok then
+                        Library:Notify("✅ Config loaded: " .. configName)
+                    else
+                        Library:Notify("⚠️ Config load failed: " .. tostring(err))
+                    end
+                end
+            else
+                Library:Notify("⚠️ Still at stage " .. final .. " — try manually.")
+            end
+        end)
+    end
+})
+
+-- Codes
+local CodesBox = Tabs["Misc"]:AddLeftGroupbox("Codes", "key")
+CodesBox:AddButton({
+    Text = "Redeem All Codes",
+    Func = function()
+        local codes   = CodesModule.Codes or CodesModule
+        local claimed = PlayerData.Data.RedeemedCodes or {}
+        local count   = 0
+        for code in pairs(codes) do
+            if not table.find(claimed, code) then
+                CodesRemote:FireServer(code)
+                count = count + 1
+                task.wait(0.25)
+            end
+        end
+        Library:Notify("Attempted " .. count .. " code(s)!")
+    end
+})
+
+-- Auto Accept Trade
+local AutoAcceptTradeBox = Tabs["Misc"]:AddLeftGroupbox("Auto Accept Trade", "check-circle")
+AddCheckbox(AutoAcceptTradeBox, "ToggleAutoAcceptTrade", "Accept All Requests")
+AutoAcceptTradeBox:AddLabel({ Text = "Leave usernames blank to accept from anyone.", DoesWrap = true })
+AutoAcceptTradeBox:AddInput("AutoAcceptTradeUsers", {
+    Text        = "Accept Only From (user1,user2,...)",
+    Placeholder = "Leave blank to accept from anyone",
+})
+
+-- Auto Confirm Trade
+local AutoConfirmTradeBox = Tabs["Misc"]:AddLeftGroupbox("Auto Confirm Trade", "check-square")
+AutoConfirmTradeBox:AddLabel({ Text = "Automatically clicks Ready when a trade starts.", DoesWrap = true })
+AddCheckbox(AutoConfirmTradeBox, "ToggleAutoConfirmTrade", "Auto Confirm Trade")
+
+-- Auto Trade (send requests)
+local AutoTradeBox = Tabs["Misc"]:AddLeftGroupbox("Auto Trade", "repeat")
+AutoTradeBox:AddLabel({ Text = "Comma-separated usernames to trade with.", DoesWrap = true })
+AutoTradeBox:AddInput("AutoTradeUsernames", {
+    Text        = "Usernames (user1,user2,...)",
+    Placeholder = "player1,player2",
+})
+AddCheckbox(AutoTradeBox, "ToggleAutoTrade", "Auto Send Trade Requests")
+
+-- ============================================================
+-- MISC TAB – RIGHT SIDE
+-- ============================================================
+
+-- Misc
+local MiscBox = Tabs["Misc"]:AddRightGroupbox("Misc", "shield")
+AddCheckbox(MiscBox, "ToggleDisableAutoRejoin", "Disable Auto Rejoin")
+
+-- ============================================================
+-- AUTO SETTINGS
+-- ============================================================
+local AutoSettingsBox = Tabs["Misc"]:AddRightGroupbox("Auto Settings", "sliders")
+AutoSettingsBox:AddLabel({ Text = "Select desired state for each setting. Only fires when value needs to change.", DoesWrap = true })
+AddDropdown(AutoSettingsBox, "SettingsWantOn",  "Force ON",  GameSettingsList, {}, true)
+AddDropdown(AutoSettingsBox, "SettingsWantOff", "Force OFF", GameSettingsList, {}, true)
+AddCheckbox(AutoSettingsBox, "ToggleAutoSettings", "Auto Apply Settings")
+
+-- ============================================================
+-- FPS CAP
+-- ============================================================
+local FpsCapBox = Tabs["Misc"]:AddRightGroupbox("FPS Cap", "monitor")
+FpsCapBox:AddLabel({ Text = "Caps your client FPS via RunService throttle.", DoesWrap = true })
+FpsCapBox:AddInput("FpsCapValue", { Text = "FPS Limit", Placeholder = "e.g. 60" })
+AddCheckbox(FpsCapBox, "ToggleFpsCap", "Enable FPS Cap")
+
+-- Webhook
+local WebhookBox = Tabs["Misc"]:AddRightGroupbox("Webhook", "bell")
+local PingTypes  = { "None", "User", "Role" }
+WebhookBox:AddInput("WebhookURL",    { Text = "Webhook URL", Placeholder = "discord.com/api/webhooks/..." })
+WebhookBox:AddInput("WebhookPingID", { Text = "Ping ID",     Placeholder = "User or Role ID" })
+AddDropdown(WebhookBox, "WebhookPingType",       "Ping Type",       PingTypes,  "None", false)
+AddDropdown(WebhookBox, "WebhookNotifyRarities", "Notify Rarities", RarityList, {}, true)
+AddDropdown(WebhookBox, "WebhookPingRarities",   "Ping Rarities",   RarityList, {}, true)
+AddCheckbox(WebhookBox, "ToggleWebhook", "Enable Webhook")
+
+-- ============================================================
 -- Index Status helper
 -- ============================================================
 local function UpdateIndexStatus(target)
@@ -365,33 +591,24 @@ local function UpdateIndexStatus(target)
         IndexLabelEgg:SetText("Egg: —")
         IndexLabelRarity:SetText("Rarity: —")
         IndexLabelStage:SetText("Stage: Idle")
+        IndexLabelProgress:SetText("Progress: —")
         return
     end
-
     local petData = PetsModule.Pets[target.pet]
     if petData and petData.IDs then
         local assetId = petData.IDs[target.variant] or petData.IDs["Normal"]
-        if assetId then
-            IndexStatusImage:SetImage(assetId)
-        end
+        if assetId then IndexStatusImage:SetImage(assetId) end
     end
-
     local rarity = petData and petData.Rarity or "?"
-    IndexLabelPet:SetText("Pet: "    .. target.pet)
-    IndexLabelEgg:SetText("Egg: "    .. target.egg)
+    IndexLabelPet:SetText("Pet: " .. target.pet)
+    IndexLabelEgg:SetText("Egg: " .. target.egg)
     IndexLabelRarity:SetText("Rarity: " .. rarity)
-
-    local stageText
-    if target.variant == "Normal" then
-        stageText = "Hatching Normal"
-    elseif target.variant == "Golden" then
-        stageText = "Crafting Golden"
-    elseif target.variant == "Diamond" then
-        stageText = "Crafting Diamond"
-    else
-        stageText = target.variant
-    end
-    IndexLabelStage:SetText("Stage: " .. stageText)
+    local stageMap = { Normal = "Hatching Normal", Golden = "Crafting Golden", Diamond = "Crafting Diamond" }
+    IndexLabelStage:SetText("Stage: " .. (stageMap[target.variant] or target.variant))
+    local indexed = #PlayerData.Data.Index
+    local total = 0
+    for _ in pairs(PetsModule.Pets) do total = total + 3 end
+    IndexLabelProgress:SetText("Progress: " .. indexed .. "/" .. total)
 end
 
 -- ============================================================
@@ -414,9 +631,7 @@ local function InstallNoHatchHook()
                         if type(v) == "table" and v.Unbox then
                             local original
                             original = hookfunction(conn.Function, newcclosure(function(eventType, ...)
-                                if eventType == "Unbox" and Toggles.ToggleNoHatchAnim.Value then
-                                    return
-                                end
+                                if eventType == "Unbox" and Toggles.ToggleNoHatchAnim.Value then return end
                                 return original(eventType, ...)
                             end))
                             _hookRef_fn       = conn.Function
@@ -457,33 +672,6 @@ Toggles.ToggleDisableAutoRejoin:OnChanged(function(state)
     if state then InstallTeleportBlock()
     else RemoveTeleportBlock() end
 end)
-
--- ============================================================
--- SHARED HELPERS
--- ============================================================
-
-local function getBatch(eggName)
-    local eggData = EggsModule.Eggs[eggName]
-    if not eggData then return nil end
-    local price          = eggData.Price
-    local currency       = eggData.Currency
-    local currencyAmount = PlayerData.Data[currency] or 0
-    local petCount       = #LocalPlayer.Pets:GetChildren()
-    local maxStorage     = PlayerData.Data.MaxStorage or 0
-    local hasPass        = table.find(PlayerData.Data.Passes, "x8EggsHatch") ~= nil
-    if hasPass and price * 8 <= currencyAmount and petCount + 8 <= maxStorage then return "Q"
-    elseif price * 3 <= currencyAmount and petCount + 3 <= maxStorage then return "R"
-    elseif price <= currencyAmount and petCount + 1 <= maxStorage then return "E"
-    end
-    return nil
-end
-
-local function TeleportToEgg(eggName)
-    local egg = workspace.Game.Eggs:FindFirstChild(eggName)
-    if not egg or not LocalPlayer.Character then return end
-    local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if hrp then hrp.CFrame = egg:GetPivot() + Vector3.new(0, 5, 0) end
-end
 
 -- ============================================================
 -- LOGIC
@@ -926,8 +1114,6 @@ end)
 -- ============================================================
 -- Auto Auras
 -- ============================================================
-
--- Helper: returns the owned aura with the highest multiplier
 local function GetBestOwnedAura()
     local bestName, bestMult = nil, -1
     for _, auraName in ipairs(PlayerData.Data.Auras or {}) do
@@ -940,7 +1126,6 @@ local function GetBestOwnedAura()
     return bestName
 end
 
--- Auto Buy Auras (buy only)
 local autoaurabuytask
 local function StartAutoBuyAuras()
     if autoaurabuytask then task.cancel(autoaurabuytask) autoaurabuytask = nil end
@@ -967,7 +1152,6 @@ Toggles.ToggleAutoBuyAuras:OnChanged(function(state)
     else if autoaurabuytask then task.cancel(autoaurabuytask) autoaurabuytask = nil end end
 end)
 
--- Auto Equip Best Aura
 local autoequipbestauratask
 local function StartAutoEquipBestAura()
     if autoequipbestauratask then task.cancel(autoequipbestauratask) autoequipbestauratask = nil end
@@ -990,8 +1174,6 @@ end)
 -- ============================================================
 -- Auto TapSkins
 -- ============================================================
-
--- Helper: returns the owned tapskin with the highest multiplier
 local function GetBestOwnedTapSkin()
     local bestName, bestMult = nil, -1
     for _, skinName in ipairs(PlayerData.Data.TapSkins or {}) do
@@ -1004,7 +1186,6 @@ local function GetBestOwnedTapSkin()
     return bestName
 end
 
--- Auto Buy TapSkins (buy only)
 local autotapskinbuytask
 local function StartAutoBuyTapSkins()
     if autotapskinbuytask then task.cancel(autotapskinbuytask) autotapskinbuytask = nil end
@@ -1031,7 +1212,6 @@ Toggles.ToggleAutoBuyTapSkins:OnChanged(function(state)
     else if autotapskinbuytask then task.cancel(autotapskinbuytask) autotapskinbuytask = nil end end
 end)
 
--- Auto Equip Best TapSkin
 local autoequipbesttapskintask
 local function StartAutoEquipBestTapSkin()
     if autoequipbesttapskintask then task.cancel(autoequipbesttapskintask) autoequipbesttapskintask = nil end
@@ -1050,6 +1230,260 @@ Toggles.ToggleAutoEquipBestTapSkin:OnChanged(function(state)
     if state then StartAutoEquipBestTapSkin()
     else if autoequipbesttapskintask then task.cancel(autoequipbesttapskintask) autoequipbesttapskintask = nil end end
 end)
+
+-- ============================================================
+-- Auto Claim Index Reward
+-- ============================================================
+local autoclaimindexrewardtask
+local function StartAutoClaimIndexReward()
+    if autoclaimindexrewardtask then task.cancel(autoclaimindexrewardtask) autoclaimindexrewardtask = nil end
+    autoclaimindexrewardtask = task.spawn(function()
+        while Toggles.ToggleAutoClaimIndexReward.Value do
+            local questText = LocalPlayer.PlayerGui.MainUI.Frames.Index.Quest.Text
+            local current, threshold = questText:match("(%d+)/(%d+)")
+            current   = tonumber(current)
+            threshold = tonumber(threshold)
+            if current and threshold and current >= threshold then
+                AdditionalRemote:FireServer("IndexReward")
+                task.wait(2)
+            end
+            task.wait(5)
+        end
+    end)
+end
+Toggles.ToggleAutoClaimIndexReward:OnChanged(function(state)
+    if state then StartAutoClaimIndexReward()
+    else if autoclaimindexrewardtask then task.cancel(autoclaimindexrewardtask) autoclaimindexrewardtask = nil end end
+end)
+
+-- ============================================================
+-- AUTO SETTINGS
+-- ============================================================
+local autosettingstask
+
+local function ApplySettingsPass()
+    local wantOn  = Options.SettingsWantOn.Value
+    local wantOff = Options.SettingsWantOff.Value
+    for _, settingName in ipairs(GameSettingsList) do
+        local current = PlayerData.Data[settingName]
+        if wantOn[settingName] and current ~= true then
+            SettingsRemote:FireServer(settingName)
+            task.wait(0.3)
+        elseif wantOff[settingName] and current ~= false then
+            SettingsRemote:FireServer(settingName)
+            task.wait(0.3)
+        end
+    end
+end
+
+local function StartAutoSettings()
+    if autosettingstask then task.cancel(autosettingstask) autosettingstask = nil end
+    autosettingstask = task.spawn(function()
+        ApplySettingsPass()
+        while Toggles.ToggleAutoSettings.Value do
+            task.wait(5)
+            if Toggles.ToggleAutoSettings.Value then
+                ApplySettingsPass()
+            end
+        end
+    end)
+end
+
+Toggles.ToggleAutoSettings:OnChanged(function(state)
+    if state then
+        local wantOn  = Options.SettingsWantOn.Value
+        local wantOff = Options.SettingsWantOff.Value
+        if not next(wantOn) and not next(wantOff) then
+            Library:Notify("Auto Settings: Select at least one setting first!")
+            Toggles.ToggleAutoSettings:SetValue(false)
+            return
+        end
+        StartAutoSettings()
+    else
+        if autosettingstask then task.cancel(autosettingstask) autosettingstask = nil end
+    end
+end)
+
+-- ============================================================
+-- FPS CAP
+-- ============================================================
+local function ApplyFpsCap()
+    local val = tonumber(Options.FpsCapValue.Value)
+    if val and val > 0 then
+        setfpscap(val)
+    end
+end
+
+local function RemoveFpsCap()
+    setfpscap(0)
+end
+
+Toggles.ToggleFpsCap:OnChanged(function(state)
+    if state then ApplyFpsCap()
+    else RemoveFpsCap() end
+end)
+
+Options.FpsCapValue:OnChanged(function()
+    if Toggles.ToggleFpsCap.Value then
+        ApplyFpsCap()
+    end
+end)
+
+-- ============================================================
+-- Auto Accept Trade Request
+-- ============================================================
+local autoAcceptTradeConn = nil
+
+local function InstallAutoAcceptTrade()
+    if autoAcceptTradeConn then autoAcceptTradeConn:Disconnect() autoAcceptTradeConn = nil end
+    autoAcceptTradeConn = TradeRemote.OnClientEvent:Connect(function(eventType, senderName)
+        if eventType ~= "TradeRequest" then return end
+        if not Toggles.ToggleAutoAcceptTrade.Value then return end
+
+        local whitelist = ParseUsernames(Options.AutoAcceptTradeUsers.Value)
+        if #whitelist > 0 then
+            local allowed = false
+            for _, name in ipairs(whitelist) do
+                if name:lower() == tostring(senderName):lower() then
+                    allowed = true
+                    break
+                end
+            end
+            if not allowed then return end
+        end
+
+        local sender = Players:FindFirstChild(senderName)
+        if sender then
+            task.wait(0.1)
+            TradeRemote:FireServer({ "AcceptRequest", sender })
+        end
+    end)
+end
+
+Toggles.ToggleAutoAcceptTrade:OnChanged(function(state)
+    if state then InstallAutoAcceptTrade()
+    else if autoAcceptTradeConn then autoAcceptTradeConn:Disconnect() autoAcceptTradeConn = nil end end
+end)
+
+-- ============================================================
+-- Auto Confirm Trade
+-- ============================================================
+local autoConfirmTradeConn = nil
+local currentTradePartner  = nil
+
+local function InstallAutoConfirmTrade()
+    if autoConfirmTradeConn then autoConfirmTradeConn:Disconnect() autoConfirmTradeConn = nil end
+    local confirmDebounce = nil
+    autoConfirmTradeConn = TradeRemote.OnClientEvent:Connect(function(eventType, partnerName)
+        if not Toggles.ToggleAutoConfirmTrade.Value then return end
+
+        if eventType == "CreateTrade" then
+            currentTradePartner = partnerName
+        elseif eventType == "ClearTrade" or eventType == "TradeEnd" then
+            currentTradePartner = nil
+            if confirmDebounce then task.cancel(confirmDebounce) confirmDebounce = nil end
+            return
+        end
+
+        if eventType ~= "CreateTrade" and eventType ~= "Cancel" then return end
+        if not currentTradePartner then return end
+
+        if confirmDebounce then task.cancel(confirmDebounce) confirmDebounce = nil end
+        confirmDebounce = task.delay(0.75, function()
+            confirmDebounce = nil
+            if not Toggles.ToggleAutoConfirmTrade.Value then return end
+            if not currentTradePartner then return end
+            local partner = Players:FindFirstChild(currentTradePartner)
+            if partner then
+                TradeRemote:FireServer({ "AcceptTrade", partner })
+            end
+        end)
+    end)
+end
+
+Toggles.ToggleAutoConfirmTrade:OnChanged(function(state)
+    if state then InstallAutoConfirmTrade()
+    else
+        if autoConfirmTradeConn then autoConfirmTradeConn:Disconnect() autoConfirmTradeConn = nil end
+        currentTradePartner = nil
+    end
+end)
+
+-- ============================================================
+-- Auto Trade (send requests to specific players)
+-- ============================================================
+local autotradetask
+local function StartAutoTrade()
+    if autotradetask then task.cancel(autotradetask) autotradetask = nil end
+    autotradetask = task.spawn(function()
+        while Toggles.ToggleAutoTrade.Value do
+            local usernames = ParseUsernames(Options.AutoTradeUsernames.Value)
+            if #usernames == 0 then
+                task.wait(3)
+                continue
+            end
+            for _, name in ipairs(usernames) do
+                if not Toggles.ToggleAutoTrade.Value then break end
+                local target = Players:FindFirstChild(name)
+                if target and target ~= LocalPlayer then
+                    local targetPD = target:FindFirstChild("PlayerData")
+                    local inTrade  = targetPD and targetPD:FindFirstChild("InTrade") and targetPD.InTrade.Value
+                    if not inTrade then
+                        TradeRemote:FireServer({ "TradeRequest", target })
+                        task.wait(3.5)
+                    end
+                end
+            end
+            task.wait(5)
+        end
+    end)
+end
+Toggles.ToggleAutoTrade:OnChanged(function(state)
+    if state then
+        local usernames = ParseUsernames(Options.AutoTradeUsernames.Value)
+        if #usernames == 0 then
+            Library:Notify("Auto Trade: Enter at least one username first!")
+            Toggles.ToggleAutoTrade:SetValue(false)
+            return
+        end
+        StartAutoTrade()
+    else
+        if autotradetask then task.cancel(autotradetask) autotradetask = nil end
+    end
+end)
+
+-- ============================================================
+-- AUTO DELETE helper (used exclusively by Auto Index)
+-- ============================================================
+local function RunDeletePass(craftProtectedPet)
+    local deleteRarities = Options.IndexDeleteRarities.Value
+    local ignorePets     = Options.IndexIgnorePets.Value
+    if not next(deleteRarities) then return end
+
+    local toDelete = {}
+    for _, pet in pairs(LocalPlayer.Pets:GetChildren()) do
+        local petName = pet.Name
+        local petData = PetsModule.Pets[petName]
+        if petData
+            and deleteRarities[petData.Rarity]
+            and petName ~= craftProtectedPet
+            and not ignorePets[petName]
+            and pet:FindFirstChild("ID")
+        then
+            table.insert(toDelete, pet.ID.Value)
+        end
+    end
+    if #toDelete > 0 then
+        for i = 1, #toDelete, 100 do
+            local chunk = {}
+            for j = i, math.min(i + 99, #toDelete) do
+                table.insert(chunk, toDelete[j])
+            end
+            PetActionRemote:FireServer("Delete", chunk)
+            task.wait(0.3)
+        end
+    end
+end
 
 -- ============================================================
 -- AUTO INDEX
@@ -1072,7 +1506,6 @@ local function getNextIndexTarget()
 
     for _, eggName in ipairs(EggProgressionOrder) do
         if ignoreEggs[eggName] then continue end
-
         local eggData = EggsModule.Eggs[eggName]
         if not eggData then continue end
 
@@ -1122,37 +1555,11 @@ local function StartAutoIndex()
 
         while Toggles.ToggleAutoIndex.Value do
 
-            -- Auto Delete
-            local deleteRarities = Options.IndexDeleteRarities.Value
-            local ignorePets     = Options.IndexIgnorePets.Value
-
-            if next(deleteRarities) then
+            if next(Options.IndexDeleteRarities.Value) then
                 deleteTimer = deleteTimer + 0.3
                 if deleteTimer >= 3 then
                     deleteTimer = 0
-                    local toDelete = {}
-                    for _, pet in pairs(LocalPlayer.Pets:GetChildren()) do
-                        local petName = pet.Name
-                        local petData = PetsModule.Pets[petName]
-                        if petData
-                            and deleteRarities[petData.Rarity]
-                            and petName ~= craftProtectedPet
-                            and not ignorePets[petName]
-                            and pet:FindFirstChild("ID")
-                        then
-                            table.insert(toDelete, pet.ID.Value)
-                        end
-                    end
-                    if #toDelete > 0 then
-                        for i = 1, #toDelete, 100 do
-                            local chunk = {}
-                            for j = i, math.min(i + 99, #toDelete) do
-                                table.insert(chunk, toDelete[j])
-                            end
-                            PetActionRemote:FireServer("Delete", chunk)
-                            task.wait(0.3)
-                        end
-                    end
+                    RunDeletePass(craftProtectedPet)
                 end
             else
                 deleteTimer = 0
@@ -1176,8 +1583,7 @@ local function StartAutoIndex()
                 UpdateIndexStatus(target)
                 Library:Notify(
                     "Auto Index: " .. target.pet ..
-                    " [" .. target.variant .. "]" ..
-                    " — " .. target.egg
+                    " [" .. target.variant .. "] — " .. target.egg
                 )
                 SwitchRemote:FireServer("AutoHatching", true)
                 TeleportToEgg(target.egg)
@@ -1200,12 +1606,8 @@ local function StartAutoIndex()
                     task.wait(1)
                 else
                     local batch = getBatch(target.egg)
-                    if batch then
-                        EggRemote:FireServer(target.egg, batch)
-                        task.wait(0.3)
-                    else
-                        task.wait(1)
-                    end
+                    if batch then EggRemote:FireServer(target.egg, batch) task.wait(0.3)
+                    else task.wait(1) end
                 end
 
             elseif target.variant == "Diamond" then
@@ -1220,12 +1622,8 @@ local function StartAutoIndex()
                         task.wait(1)
                     else
                         local batch = getBatch(target.egg)
-                        if batch then
-                            EggRemote:FireServer(target.egg, batch)
-                            task.wait(0.3)
-                        else
-                            task.wait(1)
-                        end
+                        if batch then EggRemote:FireServer(target.egg, batch) task.wait(0.3)
+                        else task.wait(1) end
                     end
                 end
             end
@@ -1255,9 +1653,7 @@ end)
 -- ============================================================
 -- WEBHOOK SYSTEM
 -- ============================================================
-
 local EMBED_COLOR = 0x00C8B4
-
 local httpReq = (syn and syn.request) or (http and http.request) or request
 
 local function ResolveAssetURL(assetId, size)
@@ -1313,24 +1709,21 @@ local function GetPetImageURL(petName, petType)
 end
 
 local PhosphyIconURL = nil
-task.spawn(function()
-    PhosphyIconURL = ResolveIconURL("111288992980872")
-end)
+task.spawn(function() PhosphyIconURL = ResolveIconURL("111288992980872") end)
 
 local cachedAvatarURL = nil
-task.spawn(function()
-    cachedAvatarURL = ResolveAvatarURL(LocalPlayer.UserId)
-end)
+task.spawn(function() cachedAvatarURL = ResolveAvatarURL(LocalPlayer.UserId) end)
 
 local function BuildEmbed(petName, rarity, petType, petImageURL, playerAvatarURL)
     local embed = {
         title  = "🥚  " .. rarity .. " — " .. petName .. " Hatched!",
         color  = EMBED_COLOR,
         fields = {
-            { name = "Pet",    value = petName,             inline = true },
-            { name = "Rarity", value = rarity,              inline = true },
-            { name = "Type",   value = petType or "Normal", inline = true },
-            { name = "Player", value = LocalPlayer.Name,    inline = true },
+            { name = "Pet",          value = petName,                         inline = true },
+            { name = "Rarity",       value = rarity,                          inline = true },
+            { name = "Type",         value = petType or "Normal",             inline = true },
+            { name = "Player",       value = LocalPlayer.Name,                inline = true },
+            { name = "Eggs Hatched", value = tostring(PlayerData.Data.Eggs),  inline = true },
         },
         footer    = { text = "Phosphy  •  ClickBreakers" },
         timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
@@ -1424,31 +1817,38 @@ Library:OnUnload(function()
         _hookRef_original = nil
     end
     RemoveTeleportBlock()
+    RemoveFpsCap()
 
-    if actask                  then task.cancel(actask)                  actask                  = nil end
-    if ahtask                  then task.cancel(ahtask)                  ahtask                  = nil end
-    if autorebirththask        then task.cancel(autorebirththask)        autorebirththask        = nil end
-    if autospintask            then task.cancel(autospintask)            autospintask            = nil end
-    if autoevilspintask        then task.cancel(autoevilspintask)        autoevilspintask        = nil end
-    if autoupgradetask         then task.cancel(autoupgradetask)         autoupgradetask         = nil end
-    if autoequiptask           then task.cancel(autoequiptask)           autoequiptask           = nil end
-    if autobuytask             then task.cancel(autobuytask)             autobuytask             = nil end
-    if autouseitemstask        then task.cancel(autouseitemstask)        autouseitemstask        = nil end
-    if claimgiftstask          then task.cancel(claimgiftstask)          claimgiftstask          = nil end
-    if claimdailytask          then task.cancel(claimdailytask)          claimdailytask          = nil end
-    if claimachtask            then task.cancel(claimachtask)            claimachtask            = nil end
-    if claimchesttask          then task.cancel(claimchesttask)          claimchesttask          = nil end
-    if autogoldentask          then task.cancel(autogoldentask)          autogoldentask          = nil end
-    if autodiamondtask         then task.cancel(autodiamondtask)         autodiamondtask         = nil end
-    if claimseasontask         then task.cancel(claimseasontask)         claimseasontask         = nil end
-    if claimquesttask          then task.cancel(claimquesttask)          claimquesttask          = nil end
-    if autoaurabuytask         then task.cancel(autoaurabuytask)         autoaurabuytask         = nil end
-    if autoequipbestauratask   then task.cancel(autoequipbestauratask)   autoequipbestauratask   = nil end
-    if autotapskinbuytask      then task.cancel(autotapskinbuytask)      autotapskinbuytask      = nil end
-    if autoequipbesttapskintask then task.cancel(autoequipbesttapskintask) autoequipbesttapskintask = nil end
-    if autoindextask           then task.cancel(autoindextask)           autoindextask           = nil end
-    if webhookConn             then webhookConn:Disconnect()             webhookConn             = nil end
+    if actask                    then task.cancel(actask)                    actask                    = nil end
+    if ahtask                    then task.cancel(ahtask)                    ahtask                    = nil end
+    if autorebirththask          then task.cancel(autorebirththask)          autorebirththask          = nil end
+    if autospintask              then task.cancel(autospintask)              autospintask              = nil end
+    if autoevilspintask          then task.cancel(autoevilspintask)          autoevilspintask          = nil end
+    if autoupgradetask           then task.cancel(autoupgradetask)           autoupgradetask           = nil end
+    if autoequiptask             then task.cancel(autoequiptask)             autoequiptask             = nil end
+    if autobuytask               then task.cancel(autobuytask)               autobuytask               = nil end
+    if autouseitemstask          then task.cancel(autouseitemstask)          autouseitemstask          = nil end
+    if claimgiftstask            then task.cancel(claimgiftstask)            claimgiftstask            = nil end
+    if claimdailytask            then task.cancel(claimdailytask)            claimdailytask            = nil end
+    if claimachtask              then task.cancel(claimachtask)              claimachtask              = nil end
+    if claimchesttask            then task.cancel(claimchesttask)            claimchesttask            = nil end
+    if autogoldentask            then task.cancel(autogoldentask)            autogoldentask            = nil end
+    if autodiamondtask           then task.cancel(autodiamondtask)           autodiamondtask           = nil end
+    if claimseasontask           then task.cancel(claimseasontask)           claimseasontask           = nil end
+    if claimquesttask            then task.cancel(claimquesttask)            claimquesttask            = nil end
+    if autoaurabuytask           then task.cancel(autoaurabuytask)           autoaurabuytask           = nil end
+    if autoequipbestauratask     then task.cancel(autoequipbestauratask)     autoequipbestauratask     = nil end
+    if autotapskinbuytask        then task.cancel(autotapskinbuytask)        autotapskinbuytask        = nil end
+    if autoequipbesttapskintask  then task.cancel(autoequipbesttapskintask)  autoequipbesttapskintask  = nil end
+    if autoclaimindexrewardtask  then task.cancel(autoclaimindexrewardtask)  autoclaimindexrewardtask  = nil end
+    if autotradetask             then task.cancel(autotradetask)             autotradetask             = nil end
+    if autoindextask             then task.cancel(autoindextask)             autoindextask             = nil end
+    if autosettingstask          then task.cancel(autosettingstask)          autosettingstask          = nil end
+    if autoAcceptTradeConn       then autoAcceptTradeConn:Disconnect()       autoAcceptTradeConn       = nil end
+    if autoConfirmTradeConn      then autoConfirmTradeConn:Disconnect()      autoConfirmTradeConn      = nil end
+    if webhookConn               then webhookConn:Disconnect()               webhookConn               = nil end
 
+    currentTradePartner = nil
     UpdateIndexStatus(nil)
     SwitchRemote:FireServer("AutoHatching", false)
 end)
@@ -1456,13 +1856,13 @@ end)
 -- ============================================================
 -- UI Settings Tab
 -- ============================================================
-local Settings = Tabs["UI Settings"]:AddRightGroupbox("General", "wrench")
-Settings:AddLabel("MenuBind"):AddKeyPicker("MenuKeybind", {
+local UISettings = Tabs["UI Settings"]:AddRightGroupbox("General", "wrench")
+UISettings:AddLabel("MenuBind"):AddKeyPicker("MenuKeybind", {
     Default = "RightShift",
     NoUI    = true,
     Text    = "Menu keybind"
 })
-Settings:AddButton({
+UISettings:AddButton({
     Text = "Unload",
     Func = function() Library:Unload() end
 })
