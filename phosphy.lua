@@ -8,6 +8,7 @@ local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 local LocalPlayer = Players.LocalPlayer
+local RunService = game:GetService("RunService")
 
 -- Anti-AFK
 local VirtualUser = game:GetService("VirtualUser")
@@ -606,6 +607,13 @@ do
     FpsCapBox:AddLabel({ Text = "Caps your client FPS. Set 0 or untoggle to remove the cap.", DoesWrap = true })
     FpsCapBox:AddInput("FpsCapValue", { Text = "FPS Limit", Placeholder = "e.g. 60" })
     AddCheckbox(FpsCapBox, "ToggleFpsCap", "Enable FPS Cap")
+
+	local Render3DBox = Tabs.Performance:AddLeftGroupbox("3D Rendering", "eye-off")
+    Render3DBox:AddLabel({
+        Text = "Locks camera far away and blacks out fog so nothing renders. UI stays visible. Restore by untoggling.",
+        DoesWrap = true,
+    })
+    AddCheckbox(Render3DBox, "ToggleDisable3D", "Disable 3D Rendering")
 
     local AutoSettingsBox = Tabs.Misc:AddRightGroupbox("Auto Settings", "sliders")
     AutoSettingsBox:AddLabel({
@@ -1921,6 +1929,55 @@ Options.FpsCapValue:OnChanged(function()
     end
 end)
 
+local disable3DRestore = nil
+
+local function DisableRendering()
+    if disable3DRestore then return end
+
+    local Lighting = game:GetService("Lighting")
+    local cam = workspace.CurrentCamera
+
+    local savedFogEnd      = Lighting.FogEnd
+    local savedFogStart    = Lighting.FogStart
+    local savedFogColor    = Lighting.FogColor
+    local savedBrightness  = Lighting.Brightness
+    local savedCamType     = cam.CameraType
+    local savedCamCFrame   = cam.CFrame
+
+    Lighting.FogEnd     = 0
+    Lighting.FogStart   = 0
+    Lighting.FogColor   = Color3.fromRGB(0, 0, 0)
+    Lighting.Brightness = 0
+    cam.CameraType      = Enum.CameraType.Scriptable
+    cam.CFrame          = CFrame.new(0, 1e8, 0)
+
+    disable3DRestore = function()
+        Lighting.FogEnd     = savedFogEnd
+        Lighting.FogStart   = savedFogStart
+        Lighting.FogColor   = savedFogColor
+        Lighting.Brightness = savedBrightness
+        cam.CameraType      = savedCamType
+        cam.CFrame          = savedCamCFrame
+        disable3DRestore    = nil
+    end
+end
+
+local function EnableRendering()
+    if disable3DRestore then
+        disable3DRestore()
+    end
+end
+
+Toggles.ToggleDisable3D:OnChanged(function(state)
+    if state then
+        DisableRendering()
+		RunService:Set3dRenderingEnabled(false)
+    else
+        EnableRendering()
+		RunService:Set3dRenderingEnabled(true)
+    end
+end)
+
 local autoAcceptTradeConn = nil
 
 local function InstallAutoAcceptTrade()
@@ -2562,6 +2619,10 @@ Library:OnUnload(function()
     if webhookConn then
         webhookConn:Disconnect()
         webhookConn = nil
+    end
+
+	if disable3DRestore then
+        disable3DRestore()
     end
 
     currentTradePartner = nil
