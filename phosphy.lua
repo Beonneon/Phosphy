@@ -1,7 +1,8 @@
 local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
+local PhosphyRepo = "https://raw.githubusercontent.com/Beonneon/Phosphy/refs/heads/main/"
 local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
 local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
-local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
+local SaveManager = loadstring(game:HttpGet(PhosphyRepo .. "SaveManagerV3.lua"))()
 
 local PhosphyIcon = "rbxassetid://111288992980872"
 
@@ -43,6 +44,7 @@ local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 
 -- Anti-AFK
@@ -266,7 +268,7 @@ local Toggles = Library.Toggles
 
 local Window = Library:CreateWindow({
     Title = "Phosphy",
-    Footer = "disc : neonbeon 1.04",
+    Footer = "disc : neonbeon 1.05",
     Icon = 111288992980872,
     Compact = true,
     SidebarCompactWidth = 56,
@@ -274,6 +276,166 @@ local Window = Library:CreateWindow({
     ShowCustomCursor = false,
     UnlockMouseWhileOpen = false,
 })
+
+local function GetObsidianScreenGui()
+    if Library.ScreenGui and Library.ScreenGui.Parent then
+        return Library.ScreenGui
+    end
+
+    local parent = (gethui and gethui()) or game:GetService("CoreGui")
+    return parent:FindFirstChild("Obsidian")
+end
+
+local function AddPhosphyGlow(screenGui)
+    local mainFrame = screenGui and screenGui:FindFirstChild("Main", true)
+    if not mainFrame then return end
+
+    local oldGlow = mainFrame:FindFirstChild("PhosphyGlow")
+    if oldGlow then oldGlow:Destroy() end
+
+    pcall(function()
+        mainFrame.ClipsDescendants = false
+    end)
+
+    local glow = Instance.new("Frame")
+    glow.Name = "PhosphyGlow"
+    glow.AnchorPoint = Vector2.new(0.5, 0.5)
+    glow.BackgroundTransparency = 1
+    glow.Position = UDim2.fromScale(0.5, 0.5)
+    glow.Size = UDim2.fromScale(1, 1)
+    glow.ZIndex = mainFrame.ZIndex + 1
+    glow.Parent = mainFrame
+
+    local layers = {
+        { 1, 0.15 },
+        { 2, 0.45 },
+        { 3, 0.65 },
+        { 5, 0.82 },
+        { 7, 0.92 },
+    }
+
+    for i, layer in ipairs(layers) do
+        local thickness = layer[1]
+        local transparency = layer[2]
+
+        local frame = Instance.new("Frame")
+        frame.Name = "GlowLayer" .. i
+        frame.AnchorPoint = Vector2.new(0.5, 0.5)
+        frame.BackgroundTransparency = 1
+        frame.Position = UDim2.fromScale(0.5, 0.5)
+        frame.Size = UDim2.new(1, thickness * 2, 1, thickness * 2)
+        frame.ZIndex = glow.ZIndex
+        frame.Parent = glow
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 4 + thickness)
+        corner.Parent = frame
+
+        local stroke = Instance.new("UIStroke")
+        stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        stroke.Color = Color3.fromRGB(0, 200, 180)
+        stroke.Thickness = thickness
+        stroke.Transparency = transparency
+        stroke.Parent = frame
+    end
+end
+
+local function AddPhosphyToggle(screenGui)
+    local parent = screenGui
+    if not parent then
+        parent = Instance.new("ScreenGui")
+        parent.Name = "PhosphyToggleGui"
+        parent.ResetOnSpawn = false
+        parent.IgnoreGuiInset = true
+        pcall(function()
+            parent.Parent = (gethui and gethui()) or game:GetService("CoreGui")
+        end)
+    end
+
+    local oldButton = parent:FindFirstChild("PhosphyDesktopToggle")
+    if oldButton then oldButton:Destroy() end
+
+    local button = Instance.new("ImageButton")
+    button.Name = "PhosphyDesktopToggle"
+    button.AnchorPoint = Vector2.new(1, 0)
+    button.AutoButtonColor = false
+    button.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+    button.BorderSizePixel = 0
+    button.Image = PhosphyIcon
+    button.Position = UDim2.new(1, -10, 0, 8)
+    button.ScaleType = Enum.ScaleType.Fit
+    button.Size = UDim2.fromOffset(46, 46)
+    button.ZIndex = 20000
+    button.Parent = parent
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(1, 0)
+    corner.Parent = button
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(0, 200, 180)
+    stroke.Thickness = 1.5
+    stroke.Transparency = 0.05
+    stroke.Parent = button
+
+    local dragging = false
+    local moved = false
+    local dragStart = nil
+    local startPosition = nil
+
+    button.InputBegan:Connect(function(input)
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1
+            and input.UserInputType ~= Enum.UserInputType.Touch
+        then
+            return
+        end
+
+        dragging = true
+        moved = false
+        dragStart = input.Position
+        startPosition = button.Position
+
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if not dragging then return end
+        if input.UserInputType ~= Enum.UserInputType.MouseMovement
+            and input.UserInputType ~= Enum.UserInputType.Touch
+        then
+            return
+        end
+
+        local delta = input.Position - dragStart
+        if math.abs(delta.X) > 3 or math.abs(delta.Y) > 3 then
+            moved = true
+        end
+
+        button.Position = UDim2.new(
+            startPosition.X.Scale,
+            startPosition.X.Offset + delta.X,
+            startPosition.Y.Scale,
+            startPosition.Y.Offset + delta.Y
+        )
+    end)
+
+    button.MouseButton1Click:Connect(function()
+        if moved then return end
+        Library:Toggle()
+    end)
+end
+
+local function InstallPhosphyWindowAddons()
+    local screenGui = GetObsidianScreenGui()
+    AddPhosphyGlow(screenGui)
+    AddPhosphyToggle(screenGui)
+end
+
+task.defer(InstallPhosphyWindowAddons)
 
 local Tabs = {
     Main = Window:AddTab("", "user"),
