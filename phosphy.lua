@@ -198,6 +198,7 @@ local SummaryMetricList = {
     "Spins Gained",
     "Evil Spins Gained",
     "Items Net Change",
+    "Total Clicks",
     "Total Rebirths",
     "Total Gems",
     "Total Eggs Hatched",
@@ -248,7 +249,7 @@ local SendSummaryWebhookTest
 
 local Window = Library:CreateWindow({
     Title = "Phosphy",
-    Footer = "disc : neonbeon 1.13",
+    Footer = "disc : neonbeon 1.14",
     Icon = 111288992980872,
     Compact = true,
     SidebarCompactWidth = 56,
@@ -2903,25 +2904,39 @@ local function ReadLeaderstatValue(names)
     return nil
 end
 
+local function FormatStatValue(value)
+    if type(value) == "number" then
+        return fmtNum(value)
+    end
+
+    if type(value) == "string" and value ~= "" then
+        local numeric = tonumber((value:gsub(",", "")))
+        if numeric then
+            return fmtNum(numeric)
+        end
+        return value
+    end
+
+    return nil
+end
+
 local function GetDisplayStat(primaryNames, fallbackNames)
     local data = PlayerData.Data or {}
 
     for _, name in ipairs(primaryNames) do
-        local value = data[name]
-        if type(value) == "number" then return fmtNum(value) end
-        if type(value) == "string" and value ~= "" then return value end
+        local formatted = FormatStatValue(data[name])
+        if formatted then return formatted end
     end
 
     local leaderValue = ReadLeaderstatValue(primaryNames)
         or ReadLeaderstatValue(fallbackNames or {})
     if leaderValue ~= nil then
-        return tostring(leaderValue)
+        return FormatStatValue(leaderValue) or tostring(leaderValue)
     end
 
     for _, name in ipairs(fallbackNames or {}) do
-        local value = data[name]
-        if type(value) == "number" then return fmtNum(value) end
-        if type(value) == "string" and value ~= "" then return value end
+        local formatted = FormatStatValue(data[name])
+        if formatted then return formatted end
     end
 
     return "0"
@@ -2929,28 +2944,28 @@ end
 
 local function GetTotalTimePlayed()
     local data = PlayerData.Data or {}
+    local gifts = LocalPlayer:FindFirstChild("Gifts")
+    local timer = gifts and gifts:FindFirstChild("Timer")
+    if timer and type(timer.Value) == "number" then
+        return timer.Value
+    end
+
     local candidates = {
         data.TotalPlaytime,
         data.TotalPlayTime,
-        data.TimePlayed,
-        data.Playtime,
-        data.PlayTime,
         data.TotalTimePlayed,
         data.TimePlayedTotal,
         data.PlaytimeTotal,
         data.PlayTimeTotal,
+        data.TimePlayed,
+        data.Playtime,
+        data.PlayTime,
     }
 
     for _, value in ipairs(candidates) do
         if type(value) == "number" then
             return value
         end
-    end
-
-    local gifts = LocalPlayer:FindFirstChild("Gifts")
-    local timer = gifts and gifts:FindFirstChild("Timer")
-    if timer and type(timer.Value) == "number" then
-        return timer.Value
     end
 
     return 0
@@ -2991,6 +3006,12 @@ local function BuildSummaryMetricEntries(totals, itemBreakdown)
     AddSummaryMetric(entries, "Spins Gained", fmtNum(totals.Spins), "Spins")
     AddSummaryMetric(entries, "Evil Spins Gained", fmtNum(totals.EvilSpins), "EvilSpins")
     AddSummaryMetric(entries, "Items Net Change", BuildItemsSummary(totals.Items, itemBreakdown), itemBreakdown[1] and itemBreakdown[1].Name or "Surprise Box")
+    AddSummaryMetric(entries, "Total Clicks", GetDisplayStat({
+        "TotalClicks",
+        "ClicksTotal",
+        "TotalClick",
+        "ClickTotal",
+    }, { "Clicks" }), "Clicks")
     AddSummaryMetric(entries, "Total Rebirths", GetDisplayStat({
         "TotalRebirths",
         "RebirthsTotal",
