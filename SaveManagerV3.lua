@@ -806,7 +806,8 @@ local SaveManager = {} do
             Dialog:AddInput("SaveManager_AccName", { Text = "Account name", Default = playerName, Placeholder = "Exact username" })
             Dialog:AddDropdown("SaveManager_AccConfig", { Text = "Config to load", Values = self:RefreshConfigList(), AllowNull = true })
 
-            section:AddButton("Account configs", function()
+            section:AddDivider("Accounts")
+            section:AddButton("Account Configs", function()
                 self.Library.Options.SaveManager_AccConfig:SetValues(self:RefreshConfigList())
                 accountConfigs = self:GetAccountConfigs()
                 self.Library.Options.SaveManager_AccList:SetItems(self:_BuildAccountListItems(accountConfigs))
