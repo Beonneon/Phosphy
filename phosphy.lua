@@ -105,17 +105,83 @@ for _, name in ipairs(MerchantItemList) do
     MerchantDefaultSelected[name] = true
 end
 
-local function fmtNum(n)
-    if n >= 1e12 then
-        return string.format("%.0fT", n / 1e12)
-    elseif n >= 1e9 then
-        return string.format("%.0fB", n / 1e9)
-    elseif n >= 1e6 then
-        return string.format("%.0fM", n / 1e6)
-    elseif n >= 1e3 then
-        return string.format("%.0fK", n / 1e3)
+local NumberSuffixes = {
+    "",
+    "K",
+    "M",
+    "B",
+    "T",
+    "Qa",
+    "Qi",
+    "Sx",
+    "Sp",
+    "O",
+    "N",
+    "Dc",
+    "Ud",
+    "Dd",
+    "Td",
+    "Qad",
+    "Qid",
+    "Sxd",
+    "Spd",
+    "Od",
+    "Nd",
+}
+local NumberSuffixMultipliers = {}
+for i, suffix in ipairs(NumberSuffixes) do
+    if suffix ~= "" then
+        NumberSuffixMultipliers[suffix] = 10 ^ ((i - 1) * 3)
+        NumberSuffixMultipliers[suffix:lower()] = NumberSuffixMultipliers[suffix]
     end
-    return tostring(n)
+end
+NumberSuffixMultipliers.Oc = NumberSuffixMultipliers.O
+NumberSuffixMultipliers.No = NumberSuffixMultipliers.N
+NumberSuffixMultipliers.oc = NumberSuffixMultipliers.O
+NumberSuffixMultipliers.no = NumberSuffixMultipliers.N
+
+local function trimNumberText(text)
+    text = text:gsub("(%..-)0+$", "%1")
+    text = text:gsub("%.$", "")
+    return text
+end
+
+local function fmtNum(n)
+    n = tonumber(n) or 0
+    local sign = n < 0 and "-" or ""
+    n = math.abs(n)
+
+    if n < 1000 then
+        return sign .. tostring(math.floor(n))
+    end
+
+    local suffixIndex = math.min(math.floor(math.log10(n) / 3) + 1, #NumberSuffixes)
+    local suffix = NumberSuffixes[suffixIndex]
+    local scaled = n / (10 ^ ((suffixIndex - 1) * 3))
+    local decimals = scaled >= 100 and 0 or (scaled >= 10 and 1 or 2)
+    return sign .. trimNumberText(string.format("%." .. decimals .. "f", scaled)) .. suffix
+end
+
+local function parseCompactNumber(value)
+    if type(value) == "number" then
+        return value
+    end
+
+    if type(value) ~= "string" then
+        return nil
+    end
+
+    local text = value:gsub(",", ""):gsub("%s+", "")
+    local raw, suffix = text:match("^([%+%-]?%d+%.?%d*)(%a*)$")
+    if not raw then return nil end
+
+    local numeric = tonumber(raw)
+    if not numeric then return nil end
+    if suffix == "" then return numeric end
+
+    local mult = NumberSuffixMultipliers[suffix]
+    if not mult then return nil end
+    return numeric * mult
 end
 
 local RebirthTiers = {}
@@ -251,7 +317,7 @@ local SendSummaryWebhookTest
 
 local Window = Library:CreateWindow({
     Title = "Phosphy",
-    Footer = "disc : neonbeon 1.16",
+    Footer = "disc : neonbeon 1.17",
     Icon = 111288992980872,
     Compact = true,
     SidebarCompactWidth = 56,
@@ -2856,6 +2922,10 @@ local SummaryMetricIcons = {
     ["Total Time Played"] = "⏱ Total Time Played",
 }
 
+local function normalizeStatName(name)
+    return tostring(name):lower():gsub("[^%w]", "")
+end
+
 local function ReadLeaderstatValue(names)
     local leaderstats = LocalPlayer:FindFirstChild("leaderstats")
     if not leaderstats then return nil end
@@ -2867,16 +2937,28 @@ local function ReadLeaderstatValue(names)
         end
     end
 
+    local wanted = {}
+    for _, name in ipairs(names) do
+        wanted[normalizeStatName(name)] = true
+    end
+
+    for _, stat in ipairs(leaderstats:GetChildren()) do
+        if wanted[normalizeStatName(stat.Name)] and stat.Value ~= nil then
+            return stat.Value
+        end
+    end
+
     return nil
 end
 
 local function FormatStatValue(value)
-    if type(value) == "number" then
-        return fmtNum(value)
+    local numeric = parseCompactNumber(value)
+    if numeric then
+        return fmtNum(numeric)
     end
 
     if type(value) == "string" and value ~= "" then
-        local numeric = tonumber((value:gsub(",", "")))
+        numeric = tonumber((value:gsub(",", "")))
         if numeric then
             return fmtNum(numeric)
         end
@@ -2910,10 +2992,22 @@ end
 
 local function GetTotalTimePlayed()
     local data = PlayerData.Data or {}
-    local gifts = LocalPlayer:FindFirstChild("Gifts")
-    local timer = gifts and gifts:FindFirstChild("Timer")
-    if timer and type(timer.Value) == "number" then
-        return timer.Value
+
+    local leaderValue = ReadLeaderstatValue({
+        "Total Time Played",
+        "Time Played",
+        "Play Time",
+        "Total Time",
+        "Time",
+        "Playtime",
+        "PlayTime",
+        "TimePlayed",
+        "TotalPlaytime",
+        "TotalPlayTime",
+        "TotalTimePlayed",
+    })
+    if leaderValue ~= nil then
+        return leaderValue
     end
 
     local candidates = {
@@ -2929,7 +3023,7 @@ local function GetTotalTimePlayed()
     }
 
     for _, value in ipairs(candidates) do
-        if type(value) == "number" then
+        if type(value) == "number" or (type(value) == "string" and value ~= "") then
             return value
         end
     end
@@ -2938,6 +3032,15 @@ local function GetTotalTimePlayed()
 end
 
 local function fmtDuration(seconds)
+    if type(seconds) == "string" and seconds ~= "" then
+        local compact = parseCompactNumber(seconds)
+        if compact then
+            seconds = compact
+        else
+            return seconds
+        end
+    end
+
     seconds = math.max(0, math.floor(tonumber(seconds) or 0))
     local days = math.floor(seconds / 86400)
     seconds = seconds % 86400
