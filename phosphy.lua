@@ -191,6 +191,22 @@ table.sort(AllPetNamesList)
 
 local RarityList = { "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Exclusive", "Secret", "Celestial" }
 local GameSettingsList = { "BetterQuality", "Music", "HideOtherPets", "HideAuras" }
+local SummaryMetricList = {
+    "Eggs Hatched",
+    "Rebirths Gained",
+    "Gems Gained",
+    "Spins Gained",
+    "Evil Spins Gained",
+    "Items Net Change",
+    "Total Rebirths",
+    "Total Gems",
+    "Total Eggs Hatched",
+    "Total Time Played",
+}
+local SummaryMetricDefaultSelected = {}
+for _, metricName in ipairs(SummaryMetricList) do
+    SummaryMetricDefaultSelected[metricName] = true
+end
 
 local shopData = {}
 local shopSeed = nil
@@ -232,7 +248,7 @@ local SendSummaryWebhookTest
 
 local Window = Library:CreateWindow({
     Title = "Phosphy",
-    Footer = "disc : neonbeon 1.10",
+    Footer = "disc : neonbeon 1.11",
     Icon = 111288992980872,
     Compact = true,
     SidebarCompactWidth = 56,
@@ -678,12 +694,10 @@ do
         end,
     })
     AddDivider(SummaryWebhookBox, "Metrics")
-    AddCheckbox(SummaryWebhookBox, "ToggleSummaryEggs", "Eggs Hatched", true)
-    AddCheckbox(SummaryWebhookBox, "ToggleSummaryRebirths", "Rebirths Gained", true)
-    AddCheckbox(SummaryWebhookBox, "ToggleSummaryGems", "Gems Gained", true)
-    AddCheckbox(SummaryWebhookBox, "ToggleSummarySpins", "Spins Gained", true)
-    AddCheckbox(SummaryWebhookBox, "ToggleSummaryEvilSpins", "Evil Spins Gained", true)
-    AddCheckbox(SummaryWebhookBox, "ToggleSummaryItems", "Items Net Change", true)
+    AddDropdown(SummaryWebhookBox, "SummaryMetrics", "Summary Metrics", SummaryMetricList, SummaryMetricDefaultSelected, true)
+    task.defer(function()
+        Options.SummaryMetrics:SetValue(SummaryMetricDefaultSelected)
+    end)
     AddDivider(SummaryWebhookBox, "Timer")
     AddSlider(SummaryWebhookBox, "WebhookSummaryMinutes", "Every", 1, 60, 10, "m")
     AddCheckbox(SummaryWebhookBox, "ToggleWebhookSummary", "Summary Webhook")
@@ -2743,18 +2757,14 @@ local function GetItemDelta(beforeItems, afterItems)
     return total, changed
 end
 
-local function IsSummaryMetricEnabled(toggleName)
-    local toggle = Toggles[toggleName]
-    return toggle and toggle.Value == true
+local function IsSummaryMetricEnabled(metricName)
+    local selected = Options.SummaryMetrics and Options.SummaryMetrics.Value
+    return type(selected) == "table" and selected[metricName] == true
 end
 
 local function HasSummaryMetricSelected()
-    return IsSummaryMetricEnabled("ToggleSummaryEggs")
-        or IsSummaryMetricEnabled("ToggleSummaryRebirths")
-        or IsSummaryMetricEnabled("ToggleSummaryGems")
-        or IsSummaryMetricEnabled("ToggleSummarySpins")
-        or IsSummaryMetricEnabled("ToggleSummaryEvilSpins")
-        or IsSummaryMetricEnabled("ToggleSummaryItems")
+    local selected = Options.SummaryMetrics and Options.SummaryMetrics.Value
+    return type(selected) == "table" and next(selected) ~= nil
 end
 
 local function BuildItemsSummary(total, changed)
@@ -2843,90 +2853,113 @@ local function GetSummaryAssetURL(name)
     return url
 end
 
-local function GetSummaryImageURL(totals, itemBreakdown)
-    if #itemBreakdown > 0 then
-        return GetSummaryAssetURL(itemBreakdown[1].Name)
+local function GetTotalTimePlayed()
+    local data = PlayerData.Data or {}
+    local candidates = {
+        data.TimePlayed,
+        data.Playtime,
+        data.PlayTime,
+        data.TotalTimePlayed,
+        data.TimePlayedTotal,
+    }
+
+    for _, value in ipairs(candidates) do
+        if type(value) == "number" then
+            return value
+        end
     end
-    if totals.EvilSpins > 0 then return GetSummaryAssetURL("EvilSpins") end
-    if totals.Spins > 0 then return GetSummaryAssetURL("Spins") end
-    if totals.Gems > 0 then return GetSummaryAssetURL("Gems") end
-    if totals.Rebirths > 0 then return GetSummaryAssetURL("Rebirths") end
-    return nil
+
+    local gifts = LocalPlayer:FindFirstChild("Gifts")
+    local timer = gifts and gifts:FindFirstChild("Timer")
+    if timer and type(timer.Value) == "number" then
+        return timer.Value
+    end
+
+    return 0
 end
 
-local function BuildSummaryEmbed(minutes, totals, isTest)
+local function fmtDuration(seconds)
+    seconds = math.max(0, math.floor(tonumber(seconds) or 0))
+    local days = math.floor(seconds / 86400)
+    seconds = seconds % 86400
+    local hours = math.floor(seconds / 3600)
+    seconds = seconds % 3600
+    local minutes = math.floor(seconds / 60)
+
+    if days > 0 then
+        return string.format("%dd %dh %dm", days, hours, minutes)
+    elseif hours > 0 then
+        return string.format("%dh %dm", hours, minutes)
+    end
+
+    return string.format("%dm", minutes)
+end
+
+local function AddSummaryMetric(entries, metricName, value, imageName)
+    if IsSummaryMetricEnabled(metricName) then
+        table.insert(entries, {
+            Name = metricName,
+            Value = value,
+            ImageName = imageName,
+        })
+    end
+end
+
+local function BuildSummaryMetricEntries(totals, itemBreakdown)
+    local data = PlayerData.Data or {}
+    local entries = {}
+    AddSummaryMetric(entries, "Eggs Hatched", fmtNum(totals.Eggs), "ExclusiveEgg")
+    AddSummaryMetric(entries, "Rebirths Gained", fmtNum(totals.Rebirths), "Rebirths")
+    AddSummaryMetric(entries, "Gems Gained", fmtNum(totals.Gems), "Gems")
+    AddSummaryMetric(entries, "Spins Gained", fmtNum(totals.Spins), "Spins")
+    AddSummaryMetric(entries, "Evil Spins Gained", fmtNum(totals.EvilSpins), "EvilSpins")
+    AddSummaryMetric(entries, "Items Net Change", BuildItemsSummary(totals.Items, itemBreakdown), itemBreakdown[1] and itemBreakdown[1].Name or "Surprise Box")
+    AddSummaryMetric(entries, "Total Rebirths", fmtNum(data.Rebirths or 0), "Rebirths")
+    AddSummaryMetric(entries, "Total Gems", fmtNum(data.Gems or 0), "Gems")
+    AddSummaryMetric(entries, "Total Eggs Hatched", fmtNum(data.Eggs or 0), "ExclusiveEgg")
+    AddSummaryMetric(entries, "Total Time Played", fmtDuration(GetTotalTimePlayed()), nil)
+    return entries
+end
+
+local function BuildSummaryEmbeds(minutes, totals, isTest)
     local itemBreakdown = GetSortedItemBreakdown(totals.ItemBreakdown)
-    local fields = {
-        { name = "Window", value = isTest and "Test" or tostring(minutes) .. " minute(s)", inline = true },
-        { name = "Player", value = LocalPlayer.Name, inline = true },
-    }
+    local entries = BuildSummaryMetricEntries(totals, itemBreakdown)
+    local embeds = {}
 
-    if IsSummaryMetricEnabled("ToggleSummaryEggs") then
-        table.insert(fields, {
-            name = "Eggs Hatched",
-            value = fmtNum(totals.Eggs),
-            inline = true,
-        })
+    if #entries == 0 then
+        return embeds
     end
 
-    if IsSummaryMetricEnabled("ToggleSummaryRebirths") then
-        table.insert(fields, {
-            name = "Rebirths Gained",
-            value = fmtNum(totals.Rebirths),
-            inline = true,
-        })
+    for i, entry in ipairs(entries) do
+        if i > 10 then break end
+        local iconURL = entry.ImageName and GetSummaryAssetURL(entry.ImageName)
+        local author = { name = entry.Name }
+        if iconURL then
+            author.icon_url = iconURL
+        end
+        local embed = {
+            color = EMBED_COLOR,
+            author = author,
+            description = tostring(entry.Value),
+        }
+
+        if i == 1 then
+            embed.title = isTest and "Summary Webhook Test" or "Progress Summary"
+            embed.fields = {
+                { name = "Window", value = isTest and "Test" or tostring(minutes) .. " minute(s)", inline = true },
+                { name = "Player", value = LocalPlayer.Name, inline = true },
+            }
+            if cachedAvatarURL then
+                embed.thumbnail = { url = cachedAvatarURL }
+            end
+            embed.footer = { text = "Phosphy - ClickBreakers" }
+            embed.timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+        end
+
+        table.insert(embeds, embed)
     end
 
-    if IsSummaryMetricEnabled("ToggleSummaryGems") then
-        table.insert(fields, {
-            name = "Gems Gained",
-            value = fmtNum(totals.Gems),
-            inline = true,
-        })
-    end
-
-    if IsSummaryMetricEnabled("ToggleSummarySpins") then
-        table.insert(fields, {
-            name = "Spins Gained",
-            value = fmtNum(totals.Spins),
-            inline = true,
-        })
-    end
-
-    if IsSummaryMetricEnabled("ToggleSummaryEvilSpins") then
-        table.insert(fields, {
-            name = "Evil Spins Gained",
-            value = fmtNum(totals.EvilSpins),
-            inline = true,
-        })
-    end
-
-    if IsSummaryMetricEnabled("ToggleSummaryItems") then
-        table.insert(fields, {
-            name = "Items Net Change",
-            value = BuildItemsSummary(totals.Items, itemBreakdown),
-            inline = false,
-        })
-    end
-
-    local embed = {
-        title = isTest and "Summary Webhook Test" or "Progress Summary",
-        color = EMBED_COLOR,
-        fields = fields,
-        footer = { text = "Phosphy - ClickBreakers" },
-        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
-    }
-
-    if cachedAvatarURL then
-        embed.thumbnail = { url = cachedAvatarURL }
-    end
-
-    local summaryImageURL = GetSummaryImageURL(totals, itemBreakdown)
-    if summaryImageURL then
-        embed.image = { url = summaryImageURL }
-    end
-
-    return embed
+    return embeds
 end
 
 SendAlertWebhookTest = function()
@@ -2963,9 +2996,7 @@ SendSummaryWebhookTest = function()
     end
 
     local totals = MakeSummaryTotals()
-    local ok = PostWebhook(url, "", {
-        BuildSummaryEmbed(tonumber(Options.WebhookSummaryMinutes.Value) or 10, totals, true),
-    })
+    local ok = PostWebhook(url, "", BuildSummaryEmbeds(tonumber(Options.WebhookSummaryMinutes.Value) or 10, totals, true))
     Library:Notify(ok and "Summary webhook test sent!" or "Summary webhook test failed.")
 end
 
@@ -3011,9 +3042,7 @@ local function StartWebhookSummary()
 
             local currentUrl = Options.WebhookSummaryURL.Value
             if currentUrl and currentUrl ~= "" then
-                PostWebhook(currentUrl, "", {
-                    BuildSummaryEmbed(minutes, totals, false),
-                })
+                PostWebhook(currentUrl, "", BuildSummaryEmbeds(minutes, totals, false))
             else
                 Library:Notify("Summary Webhook: URL is empty. Stopping.")
                 Toggles.ToggleWebhookSummary:SetValue(false)
