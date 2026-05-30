@@ -317,7 +317,7 @@ local SendSummaryWebhookTest
 
 local Window = Library:CreateWindow({
     Title = "Phosphy",
-    Footer = "disc : neonbeon 1.17",
+    Footer = "disc : neonbeon 1.18",
     Icon = 111288992980872,
     Compact = true,
     SidebarCompactWidth = 56,
@@ -2992,32 +2992,14 @@ end
 
 local function GetTotalTimePlayed()
     local data = PlayerData.Data or {}
-
-    local leaderValue = ReadLeaderstatValue({
-        "Total Time Played",
-        "Time Played",
-        "Play Time",
-        "Total Time",
-        "Time",
-        "Playtime",
-        "PlayTime",
-        "TimePlayed",
-        "TotalPlaytime",
-        "TotalPlayTime",
-        "TotalTimePlayed",
-    })
-    if leaderValue ~= nil then
-        return leaderValue
-    end
-
     local candidates = {
+        data.TimePlayed,
         data.TotalPlaytime,
         data.TotalPlayTime,
         data.TotalTimePlayed,
         data.TimePlayedTotal,
         data.PlaytimeTotal,
         data.PlayTimeTotal,
-        data.TimePlayed,
         data.Playtime,
         data.PlayTime,
     }
