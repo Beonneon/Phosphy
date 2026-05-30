@@ -248,7 +248,7 @@ local SendSummaryWebhookTest
 
 local Window = Library:CreateWindow({
     Title = "Phosphy",
-    Footer = "disc : neonbeon 1.11",
+    Footer = "disc : neonbeon 1.12",
     Icon = 111288992980872,
     Compact = true,
     SidebarCompactWidth = 56,
@@ -2690,6 +2690,16 @@ end
 local function MakeSummarySnapshot()
     local itemCounts = {}
     local data = PlayerData.Data or {}
+    local function pickNumber(names)
+        for _, name in ipairs(names) do
+            local value = data[name]
+            if type(value) == "number" then
+                return value
+            end
+        end
+        return 0
+    end
+
     for itemName, count in pairs(data.Items or {}) do
         if type(count) == "number" then
             itemCounts[itemName] = count
@@ -2697,9 +2707,9 @@ local function MakeSummarySnapshot()
     end
 
     return {
-        Eggs = data.Eggs or 0,
-        Rebirths = data.Rebirths or 0,
-        Gems = data.Gems or 0,
+        Eggs = pickNumber({ "TotalEggsHatched", "EggsHatchedTotal", "TotalEggs", "EggsTotal", "EggsHatched", "Eggs" }),
+        Rebirths = pickNumber({ "TotalRebirths", "RebirthsTotal", "TotalRebirth", "RebirthTotal", "Rebirths" }),
+        Gems = pickNumber({ "TotalGems", "GemsTotal", "TotalGem", "GemTotal", "GemsEarned", "Gems" }),
         Spins = data.Spins or 0,
         EvilSpins = data.EvilSpins or 0,
         Items = itemCounts,
@@ -2824,43 +2834,69 @@ local function GetSortedItemBreakdown(itemBreakdown)
     return changed
 end
 
-local _summaryAssetCache = {}
+local SummaryMetricIcons = {
+    ["Eggs Hatched"] = "🥚 Eggs Hatched",
+    ["Rebirths Gained"] = "🔁 Rebirths Gained",
+    ["Gems Gained"] = "💎 Gems Gained",
+    ["Spins Gained"] = "🎡 Spins Gained",
+    ["Evil Spins Gained"] = "😈 Evil Spins Gained",
+    ["Items Net Change"] = "📦 Items Net Change",
+    ["Total Rebirths"] = "🔁 Total Rebirths",
+    ["Total Gems"] = "💎 Total Gems",
+    ["Total Eggs Hatched"] = "🥚 Total Eggs Hatched",
+    ["Total Time Played"] = "⏱ Total Time Played",
+}
 
-local function GetSummaryAssetId(name)
-    local raw = Items.Items and Items.Items[name]
-    if type(raw) == "string" then
-        return raw:match("%d+")
-    elseif type(raw) == "table" then
-        local image = raw.Image or raw.Icon or raw.Asset or raw.AssetId or raw.ID
-        if image then return tostring(image):match("%d+") end
+local function ReadLeaderstatValue(names)
+    local leaderstats = LocalPlayer:FindFirstChild("leaderstats")
+    if not leaderstats then return nil end
+
+    for _, name in ipairs(names) do
+        local stat = leaderstats:FindFirstChild(name)
+        if stat and stat.Value ~= nil then
+            return stat.Value
+        end
     end
+
     return nil
 end
 
-local function GetSummaryAssetURL(name)
-    if _summaryAssetCache[name] ~= nil then
-        return _summaryAssetCache[name] or nil
+local function GetDisplayStat(primaryNames, fallbackNames)
+    local data = PlayerData.Data or {}
+
+    for _, name in ipairs(primaryNames) do
+        local value = data[name]
+        if type(value) == "number" then return fmtNum(value) end
+        if type(value) == "string" and value ~= "" then return value end
     end
 
-    local assetId = GetSummaryAssetId(name)
-    if not assetId then
-        _summaryAssetCache[name] = false
-        return nil
+    local leaderValue = ReadLeaderstatValue(primaryNames)
+        or ReadLeaderstatValue(fallbackNames or {})
+    if leaderValue ~= nil then
+        return tostring(leaderValue)
     end
 
-    local url = ResolveAssetURL(assetId, "150x150")
-    _summaryAssetCache[name] = url or false
-    return url
+    for _, name in ipairs(fallbackNames or {}) do
+        local value = data[name]
+        if type(value) == "number" then return fmtNum(value) end
+        if type(value) == "string" and value ~= "" then return value end
+    end
+
+    return "0"
 end
 
 local function GetTotalTimePlayed()
     local data = PlayerData.Data or {}
     local candidates = {
+        data.TotalPlaytime,
+        data.TotalPlayTime,
         data.TimePlayed,
         data.Playtime,
         data.PlayTime,
         data.TotalTimePlayed,
         data.TimePlayedTotal,
+        data.PlaytimeTotal,
+        data.PlayTimeTotal,
     }
 
     for _, value in ipairs(candidates) do
@@ -2895,71 +2931,81 @@ local function fmtDuration(seconds)
     return string.format("%dm", minutes)
 end
 
-local function AddSummaryMetric(entries, metricName, value, imageName)
+local function AddSummaryMetric(entries, metricName, value)
     if IsSummaryMetricEnabled(metricName) then
         table.insert(entries, {
             Name = metricName,
             Value = value,
-            ImageName = imageName,
         })
     end
 end
 
+local function AddSummaryField(fields, entry)
+    local label = SummaryMetricIcons[entry.Name] or entry.Name
+    table.insert(fields, {
+        name = label,
+        value = tostring(entry.Value),
+        inline = entry.Name ~= "Items Net Change",
+    })
+end
+
 local function BuildSummaryMetricEntries(totals, itemBreakdown)
-    local data = PlayerData.Data or {}
     local entries = {}
-    AddSummaryMetric(entries, "Eggs Hatched", fmtNum(totals.Eggs), "ExclusiveEgg")
-    AddSummaryMetric(entries, "Rebirths Gained", fmtNum(totals.Rebirths), "Rebirths")
-    AddSummaryMetric(entries, "Gems Gained", fmtNum(totals.Gems), "Gems")
-    AddSummaryMetric(entries, "Spins Gained", fmtNum(totals.Spins), "Spins")
-    AddSummaryMetric(entries, "Evil Spins Gained", fmtNum(totals.EvilSpins), "EvilSpins")
-    AddSummaryMetric(entries, "Items Net Change", BuildItemsSummary(totals.Items, itemBreakdown), itemBreakdown[1] and itemBreakdown[1].Name or "Surprise Box")
-    AddSummaryMetric(entries, "Total Rebirths", fmtNum(data.Rebirths or 0), "Rebirths")
-    AddSummaryMetric(entries, "Total Gems", fmtNum(data.Gems or 0), "Gems")
-    AddSummaryMetric(entries, "Total Eggs Hatched", fmtNum(data.Eggs or 0), "ExclusiveEgg")
-    AddSummaryMetric(entries, "Total Time Played", fmtDuration(GetTotalTimePlayed()), nil)
+    AddSummaryMetric(entries, "Eggs Hatched", fmtNum(totals.Eggs))
+    AddSummaryMetric(entries, "Rebirths Gained", fmtNum(totals.Rebirths))
+    AddSummaryMetric(entries, "Gems Gained", fmtNum(totals.Gems))
+    AddSummaryMetric(entries, "Spins Gained", fmtNum(totals.Spins))
+    AddSummaryMetric(entries, "Evil Spins Gained", fmtNum(totals.EvilSpins))
+    AddSummaryMetric(entries, "Items Net Change", BuildItemsSummary(totals.Items, itemBreakdown))
+    AddSummaryMetric(entries, "Total Rebirths", GetDisplayStat({
+        "TotalRebirths",
+        "RebirthsTotal",
+        "TotalRebirth",
+        "RebirthTotal",
+    }, { "Rebirths" }))
+    AddSummaryMetric(entries, "Total Gems", GetDisplayStat({
+        "TotalGems",
+        "GemsTotal",
+        "TotalGem",
+        "GemTotal",
+    }, { "Gems" }))
+    AddSummaryMetric(entries, "Total Eggs Hatched", GetDisplayStat({
+        "TotalEggsHatched",
+        "EggsHatchedTotal",
+        "TotalEggs",
+        "EggsTotal",
+        "EggsHatched",
+    }, { "Eggs" }))
+    AddSummaryMetric(entries, "Total Time Played", fmtDuration(GetTotalTimePlayed()))
     return entries
 end
 
 local function BuildSummaryEmbeds(minutes, totals, isTest)
     local itemBreakdown = GetSortedItemBreakdown(totals.ItemBreakdown)
     local entries = BuildSummaryMetricEntries(totals, itemBreakdown)
-    local embeds = {}
+    local fields = {
+        { name = "Window", value = isTest and "Test" or tostring(minutes) .. " minute(s)", inline = true },
+        { name = "Player", value = LocalPlayer.Name, inline = true },
+    }
 
-    if #entries == 0 then
-        return embeds
+    for _, entry in ipairs(entries) do
+        AddSummaryField(fields, entry)
+        if #fields >= 25 then break end
     end
 
-    for i, entry in ipairs(entries) do
-        if i > 10 then break end
-        local iconURL = entry.ImageName and GetSummaryAssetURL(entry.ImageName)
-        local author = { name = entry.Name }
-        if iconURL then
-            author.icon_url = iconURL
-        end
-        local embed = {
-            color = EMBED_COLOR,
-            author = author,
-            description = tostring(entry.Value),
-        }
+    local embed = {
+        title = isTest and "Summary Webhook Test" or "Progress Summary",
+        color = EMBED_COLOR,
+        fields = fields,
+        footer = { text = "Phosphy - ClickBreakers" },
+        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+    }
 
-        if i == 1 then
-            embed.title = isTest and "Summary Webhook Test" or "Progress Summary"
-            embed.fields = {
-                { name = "Window", value = isTest and "Test" or tostring(minutes) .. " minute(s)", inline = true },
-                { name = "Player", value = LocalPlayer.Name, inline = true },
-            }
-            if cachedAvatarURL then
-                embed.thumbnail = { url = cachedAvatarURL }
-            end
-            embed.footer = { text = "Phosphy - ClickBreakers" }
-            embed.timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
-        end
-
-        table.insert(embeds, embed)
+    if cachedAvatarURL then
+        embed.thumbnail = { url = cachedAvatarURL }
     end
 
-    return embeds
+    return { embed }
 end
 
 SendAlertWebhookTest = function()
