@@ -7,8 +7,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
-local LocalPlayer = Players.LocalPlayer
 local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
 
 -- Anti-AFK
 local VirtualUser = game:GetService("VirtualUser")
@@ -56,6 +56,7 @@ local TapSkinsRemote = Events:WaitForChild("TapSkins")
 local TradeRemote = Events:WaitForChild("Trade")
 local AdditionalRemote = Events:WaitForChild("Additional")
 local SettingsRemote = Events:WaitForChild("Settings")
+local PotionCraftingRemote = Events:WaitForChild("PotionCrafting")
 
 local MainUI = LocalPlayer:WaitForChild("PlayerGui"):WaitForChild("MainUI")
 local Rewards = MainUI.Frames.Rewards
@@ -153,6 +154,24 @@ for itemName in pairs(PlayerData.Data.Items) do
 end
 table.sort(ItemUseList)
 
+local PotionCraftList = {}
+local PotionCraftLookup = {}
+for itemName, itemData in pairs(Items.Items) do
+    local isPotion = tostring(itemName):find("Potion", 1, true) ~= nil
+    if type(itemData) == "table" then
+        isPotion = isPotion
+            or itemData.Type == "Potion"
+            or itemData.Category == "Potion"
+            or itemData.ItemType == "Potion"
+    end
+
+    if isPotion and not PotionCraftLookup[itemName] then
+        PotionCraftLookup[itemName] = true
+        table.insert(PotionCraftList, itemName)
+    end
+end
+table.sort(PotionCraftList)
+
 local AuraList = {}
 for name in pairs(AurasModule.Auras) do
     table.insert(AuraList, name)
@@ -197,7 +216,7 @@ local Toggles = Library.Toggles
 
 local Window = Library:CreateWindow({
     Title = "Phosphy",
-    Footer = "disc : neonbeon",
+    Footer = "disc : neonbeon 1.01",
     Icon = 111288992980872,
     NotifySide = "Right",
     ShowCustomCursor = false,
@@ -229,11 +248,16 @@ do
 
     local SpinBox = Tabs.Main:AddLeftGroupbox("Auto Spin", "rotate-cw")
     AddCheckbox(SpinBox, "ToggleAutoSpin", "Auto Spin")
+    AddCheckbox(SpinBox, "ToggleConvertSpins", "Convert Spins to Evil")
     AddCheckbox(SpinBox, "ToggleAutoEvilSpin", "Auto Evil Spin")
 
     local AutoUseBox = Tabs.Main:AddLeftGroupbox("Auto Use Items", "zap")
     AddDropdown(AutoUseBox, "ItemUseSelect", "Items", ItemUseList, {}, true)
     AddCheckbox(AutoUseBox, "ToggleAutoUseItems", "Auto Use")
+
+    local PotionCraftBox = Tabs.Main:AddLeftGroupbox("Auto Potion Crafting", "flask-conical")
+    AddDropdown(PotionCraftBox, "PotionCraftSelect", "Potions", PotionCraftList, {}, true)
+    AddCheckbox(PotionCraftBox, "ToggleAutoPotionCraft", "Auto Craft Potions")
 
     local UpgradeBox = Tabs.Main:AddRightGroupbox("Auto Upgrade", "arrow-up")
     AddDropdown(UpgradeBox, "UpgradeSelect", "Upgrades", UpgradeList, UpgradeDefaultSelected, true)
@@ -608,9 +632,9 @@ do
     FpsCapBox:AddInput("FpsCapValue", { Text = "FPS Limit", Placeholder = "e.g. 60" })
     AddCheckbox(FpsCapBox, "ToggleFpsCap", "Enable FPS Cap")
 
-	local Render3DBox = Tabs.Performance:AddLeftGroupbox("3D Rendering", "eye-off")
+    local Render3DBox = Tabs.Performance:AddLeftGroupbox("3D Rendering", "eye-off")
     Render3DBox:AddLabel({
-        Text = "Locks camera far away and blacks out fog so nothing renders. UI stays visible. Restore by untoggling.",
+        Text = "Disables 3D rendering while keeping UI visible. Restore by untoggling.",
         DoesWrap = true,
     })
     AddCheckbox(Render3DBox, "ToggleDisable3D", "Disable 3D Rendering")
@@ -852,9 +876,37 @@ end
 
 Toggles.ToggleAutoSpin:OnChanged(function(state)
     if state then
+        if Toggles.ToggleConvertSpins.Value then
+            Toggles.ToggleConvertSpins:SetValue(false)
+        end
         StartAutoSpin()
     else
         StopTask("AutoSpin")
+    end
+end)
+
+local function StartConvertSpins()
+    StopTask("ConvertSpins")
+    Tasks.ConvertSpins = task.spawn(function()
+        while Toggles.ToggleConvertSpins.Value do
+            if (PlayerData.Data.Spins or 0) >= 5 then
+                EvilSpinRemote:FireServer(false, "Convert")
+                task.wait(1.5)
+            else
+                task.wait(2)
+            end
+        end
+    end)
+end
+
+Toggles.ToggleConvertSpins:OnChanged(function(state)
+    if state then
+        if Toggles.ToggleAutoSpin.Value then
+            Toggles.ToggleAutoSpin:SetValue(false)
+        end
+        StartConvertSpins()
+    else
+        StopTask("ConvertSpins")
     end
 end)
 
@@ -982,6 +1034,36 @@ Toggles.ToggleAutoUseItems:OnChanged(function(state)
         StartAutoUseItems()
     else
         StopTask("AutoUseItems")
+    end
+end)
+
+local function StartAutoPotionCraft()
+    StopTask("AutoPotionCraft")
+    Tasks.AutoPotionCraft = task.spawn(function()
+        while Toggles.ToggleAutoPotionCraft.Value do
+            local selected = Options.PotionCraftSelect.Value
+
+            for craftName in pairs(selected) do
+                if not Toggles.ToggleAutoPotionCraft.Value then break end
+                PotionCraftingRemote:FireServer(craftName)
+                task.wait(1)
+            end
+
+            task.wait(2)
+        end
+    end)
+end
+
+Toggles.ToggleAutoPotionCraft:OnChanged(function(state)
+    if state then
+        if not next(Options.PotionCraftSelect.Value) then
+            Library:Notify("Auto Potion Crafting: Select at least one potion first!")
+            Toggles.ToggleAutoPotionCraft:SetValue(false)
+            return
+        end
+        StartAutoPotionCraft()
+    else
+        StopTask("AutoPotionCraft")
     end
 end)
 
@@ -1936,29 +2018,39 @@ local function DisableRendering()
 
     local Lighting = game:GetService("Lighting")
     local cam = workspace.CurrentCamera
+    if not cam then
+        RunService:Set3dRenderingEnabled(false)
+        disable3DRestore = function()
+            RunService:Set3dRenderingEnabled(true)
+            disable3DRestore = nil
+        end
+        return
+    end
 
-    local savedFogEnd      = Lighting.FogEnd
-    local savedFogStart    = Lighting.FogStart
-    local savedFogColor    = Lighting.FogColor
-    local savedBrightness  = Lighting.Brightness
-    local savedCamType     = cam.CameraType
-    local savedCamCFrame   = cam.CFrame
+    local savedFogEnd = Lighting.FogEnd
+    local savedFogStart = Lighting.FogStart
+    local savedFogColor = Lighting.FogColor
+    local savedBrightness = Lighting.Brightness
+    local savedCamType = cam.CameraType
+    local savedCamCFrame = cam.CFrame
 
-    Lighting.FogEnd     = 0
-    Lighting.FogStart   = 0
-    Lighting.FogColor   = Color3.fromRGB(0, 0, 0)
+    Lighting.FogEnd = 0
+    Lighting.FogStart = 0
+    Lighting.FogColor = Color3.fromRGB(0, 0, 0)
     Lighting.Brightness = 0
-    cam.CameraType      = Enum.CameraType.Scriptable
-    cam.CFrame          = CFrame.new(0, 1e8, 0)
+    cam.CameraType = Enum.CameraType.Scriptable
+    cam.CFrame = CFrame.new(0, 1e8, 0)
+    RunService:Set3dRenderingEnabled(false)
 
     disable3DRestore = function()
-        Lighting.FogEnd     = savedFogEnd
-        Lighting.FogStart   = savedFogStart
-        Lighting.FogColor   = savedFogColor
+        RunService:Set3dRenderingEnabled(true)
+        Lighting.FogEnd = savedFogEnd
+        Lighting.FogStart = savedFogStart
+        Lighting.FogColor = savedFogColor
         Lighting.Brightness = savedBrightness
-        cam.CameraType      = savedCamType
-        cam.CFrame          = savedCamCFrame
-        disable3DRestore    = nil
+        cam.CameraType = savedCamType
+        cam.CFrame = savedCamCFrame
+        disable3DRestore = nil
     end
 end
 
@@ -1971,10 +2063,8 @@ end
 Toggles.ToggleDisable3D:OnChanged(function(state)
     if state then
         DisableRendering()
-		RunService:Set3dRenderingEnabled(false)
     else
         EnableRendering()
-		RunService:Set3dRenderingEnabled(true)
     end
 end)
 
@@ -2599,6 +2689,7 @@ Library:OnUnload(function()
     RemoveTeleportBlock()
     RemoveFpsCap()
     StopPerformance()
+    EnableRendering()
 
     local taskNames = {}
     for name in pairs(Tasks) do
@@ -2619,10 +2710,6 @@ Library:OnUnload(function()
     if webhookConn then
         webhookConn:Disconnect()
         webhookConn = nil
-    end
-
-	if disable3DRestore then
-        disable3DRestore()
     end
 
     currentTradePartner = nil
