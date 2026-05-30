@@ -211,12 +211,27 @@ local function AddDropdown(groupbox, id, text, values, default, multi)
     groupbox:AddDropdown(id, { Text = text, Values = values, Default = default, Multi = multi })
 end
 
+local function AddSlider(groupbox, id, text, min, max, default, suffix)
+    groupbox:AddSlider(id, {
+        Text = text,
+        Min = min,
+        Max = max,
+        Default = default,
+        Rounding = 0,
+        Suffix = suffix,
+    })
+end
+
+local function AddDivider(groupbox, text)
+    groupbox:AddDivider(text)
+end
+
 local Options = Library.Options
 local Toggles = Library.Toggles
 
 local Window = Library:CreateWindow({
     Title = "Phosphy",
-    Footer = "disc : neonbeon 1.01",
+    Footer = "disc : neonbeon 1.02",
     Icon = 111288992980872,
     NotifySide = "Right",
     ShowCustomCursor = false,
@@ -224,11 +239,12 @@ local Window = Library:CreateWindow({
 })
 
 local Tabs = {
-    Main = Window:AddTab("Main", "user"),
-    Pets = Window:AddTab("Pets", "paw-print"),
-    Performance = Window:AddTab("Performance", "zap"),
-    Misc = Window:AddTab("Misc", "settings"),
-    ["UI Settings"] = Window:AddTab("UI Settings", "folder-cog"),
+    Main = Window:AddTab("", "user"),
+    Pets = Window:AddTab("", "paw-print"),
+    Performance = Window:AddTab("", "zap"),
+    Webhook = Window:AddTab("", "bell"),
+    Misc = Window:AddTab("", "settings"),
+    ["UI Settings"] = Window:AddTab("", "folder-cog"),
 }
 
 local IndexStatusImage
@@ -314,7 +330,6 @@ do
     AddDropdown(AutoIndexBox, "IndexRaritySelect", "Target Rarities", RarityList, {}, true)
     AddDropdown(AutoIndexBox, "IndexIgnoreEggs", "Ignore Eggs", EggList, {}, true)
     AddDropdown(AutoIndexBox, "IndexCraftVariants", "Craft Variants", { "Golden", "Diamond" }, {}, true)
-    AutoIndexBox:AddLabel({ Text = "Auto Delete runs only while Auto Index is ON.", DoesWrap = true })
     AddDropdown(AutoIndexBox, "IndexDeleteRarities", "Delete Rarities", RarityList, {}, true)
     AddDropdown(AutoIndexBox, "IndexIgnorePets", "Never Delete Pets", AllPetNamesList, {}, true)
     AddCheckbox(AutoIndexBox, "ToggleAutoClaimIndexReward", "Auto Claim Index Reward")
@@ -395,10 +410,6 @@ end
 
 do
     local ProgressionBox = Tabs.Misc:AddLeftGroupbox("Auto Progression", "trending-up")
-    ProgressionBox:AddLabel({
-        Text = "Completes all 5 tutorial stages, loads your config, then optionally runs Auto Progression Rebirth.",
-        DoesWrap = true,
-    })
 
     local function GetConfigList()
         local list = { "None" }
@@ -434,10 +445,6 @@ do
 
     local progressionRebirthDefault = RebirthTiers[#RebirthsModule.Rebirths] or RebirthTiers[#RebirthTiers]
     AddDropdown(ProgressionBox, "ProgressionRebirthTarget", "Rebirth Until Tier", RebirthTiers, progressionRebirthDefault, false)
-    ProgressionBox:AddLabel({
-        Text = "Rebirths at best available tier until the selected tier unlocks, then auto-stops.",
-        DoesWrap = true,
-    })
     AddCheckbox(ProgressionBox, "ToggleProgressionRebirth", "Auto Progression Rebirth")
 
     ProgressionBox:AddButton({
@@ -603,18 +610,15 @@ do
 
     local AutoAcceptTradeBox = Tabs.Misc:AddLeftGroupbox("Auto Accept Trade", "check-circle")
     AddCheckbox(AutoAcceptTradeBox, "ToggleAutoAcceptTrade", "Accept All Requests")
-    AutoAcceptTradeBox:AddLabel({ Text = "Leave usernames blank to accept from anyone.", DoesWrap = true })
     AutoAcceptTradeBox:AddInput("AutoAcceptTradeUsers", {
         Text = "Accept Only From (user1,user2,...)",
         Placeholder = "Leave blank to accept from anyone",
     })
 
     local AutoConfirmTradeBox = Tabs.Misc:AddLeftGroupbox("Auto Confirm Trade", "check-square")
-    AutoConfirmTradeBox:AddLabel({ Text = "Automatically clicks Ready when a trade starts.", DoesWrap = true })
     AddCheckbox(AutoConfirmTradeBox, "ToggleAutoConfirmTrade", "Auto Confirm Trade")
 
     local AutoTradeBox = Tabs.Misc:AddLeftGroupbox("Auto Trade", "repeat")
-    AutoTradeBox:AddLabel({ Text = "Comma-separated usernames to trade with.", DoesWrap = true })
     AutoTradeBox:AddInput("AutoTradeUsernames", {
         Text = "Usernames (user1,user2,...)",
         Placeholder = "player1,player2",
@@ -628,34 +632,33 @@ do
     AddCheckbox(PerformanceBox, "TogglePerformance", "Enable Performance")
 
     local FpsCapBox = Tabs.Performance:AddRightGroupbox("FPS Cap", "monitor")
-    FpsCapBox:AddLabel({ Text = "Caps your client FPS. Set 0 or untoggle to remove the cap.", DoesWrap = true })
     FpsCapBox:AddInput("FpsCapValue", { Text = "FPS Limit", Placeholder = "e.g. 60" })
     AddCheckbox(FpsCapBox, "ToggleFpsCap", "Enable FPS Cap")
 
     local Render3DBox = Tabs.Performance:AddLeftGroupbox("3D Rendering", "eye-off")
-    Render3DBox:AddLabel({
-        Text = "Disables 3D rendering while keeping UI visible. Restore by untoggling.",
-        DoesWrap = true,
-    })
     AddCheckbox(Render3DBox, "ToggleDisable3D", "Disable 3D Rendering")
 
     local AutoSettingsBox = Tabs.Misc:AddRightGroupbox("Auto Settings", "sliders")
-    AutoSettingsBox:AddLabel({
-        Text = "Select desired state for each setting. Only fires when value needs to change.",
-        DoesWrap = true,
-    })
     AddDropdown(AutoSettingsBox, "SettingsWantOn", "Force ON", GameSettingsList, {}, true)
     AddDropdown(AutoSettingsBox, "SettingsWantOff", "Force OFF", GameSettingsList, {}, true)
     AddCheckbox(AutoSettingsBox, "ToggleAutoSettings", "Auto Apply Settings")
 
-    local WebhookBox = Tabs.Misc:AddRightGroupbox("Webhook", "bell")
+    local WebhookTabs = Tabs.Webhook:AddLeftTabbox("Webhook")
+    local WebhookBox = WebhookTabs:AddTab("Alerts", "bell")
+    local SummaryWebhookBox = WebhookTabs:AddTab("Summary", "bar-chart-3")
     local PingTypes = { "None", "User", "Role" }
+    AddDivider(WebhookBox, "Discord")
     WebhookBox:AddInput("WebhookURL", { Text = "Webhook URL", Placeholder = "discord.com/api/webhooks/..." })
     WebhookBox:AddInput("WebhookPingID", { Text = "Ping ID", Placeholder = "User or Role ID" })
     AddDropdown(WebhookBox, "WebhookPingType", "Ping Type", PingTypes, "None", false)
+    AddDivider(WebhookBox, "Hatches")
     AddDropdown(WebhookBox, "WebhookNotifyRarities", "Notify Rarities", RarityList, {}, true)
     AddDropdown(WebhookBox, "WebhookPingRarities", "Ping Rarities", RarityList, {}, true)
     AddCheckbox(WebhookBox, "ToggleWebhook", "Enable Webhook")
+
+    AddDivider(SummaryWebhookBox, "Timer")
+    AddSlider(SummaryWebhookBox, "WebhookSummaryMinutes", "Every", 1, 60, 10, "m")
+    AddCheckbox(SummaryWebhookBox, "ToggleWebhookSummary", "Summary Webhook")
 end
 
 local function UpdateIndexStatus(target)
@@ -734,22 +737,47 @@ end
 InstallNoHatchHook()
 
 local teleportHookOriginal = nil
+local teleportNamecallOriginal = nil
+
+local function ShouldBlockTeleport(self, method)
+    return Toggles.ToggleDisableAutoRejoin.Value
+        and self == TeleportService
+        and (
+            method == "Teleport"
+            or method == "TeleportAsync"
+            or method == "TeleportToPlaceInstance"
+        )
+end
 
 local function InstallTeleportBlock()
-    if teleportHookOriginal then return end
+    if not teleportHookOriginal then
+        teleportHookOriginal = hookfunction(TeleportService.Teleport, newcclosure(function(self, placeId, ...)
+            if ShouldBlockTeleport(self, "Teleport") then
+                return
+            end
+            return teleportHookOriginal(self, placeId, ...)
+        end))
+    end
 
-    teleportHookOriginal = hookfunction(TeleportService.Teleport, newcclosure(function(self, placeId, ...)
-        if Toggles.ToggleDisableAutoRejoin.Value then
-            return
-        end
-        return teleportHookOriginal(self, placeId, ...)
-    end))
+    if hookmetamethod and not teleportNamecallOriginal then
+        teleportNamecallOriginal = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+            local method = getnamecallmethod and getnamecallmethod() or nil
+            if ShouldBlockTeleport(self, method) then
+                return
+            end
+            return teleportNamecallOriginal(self, ...)
+        end))
+    end
 end
 
 local function RemoveTeleportBlock()
     if teleportHookOriginal then
         hookfunction(TeleportService.Teleport, teleportHookOriginal)
         teleportHookOriginal = nil
+    end
+    if hookmetamethod and teleportNamecallOriginal then
+        hookmetamethod(game, "__namecall", teleportNamecallOriginal)
+        teleportNamecallOriginal = nil
     end
 end
 
@@ -2608,6 +2636,60 @@ local function PostWebhook(url, content, embeds)
     })
 end
 
+local function BuildSummaryEmbed(minutes, hatched, totalEggs)
+    return {
+        title = "Egg Summary",
+        color = EMBED_COLOR,
+        fields = {
+            { name = "Window", value = tostring(minutes) .. " minute(s)", inline = true },
+            { name = "Hatched", value = tostring(hatched), inline = true },
+            { name = "Total Eggs", value = tostring(totalEggs), inline = true },
+            { name = "Player", value = LocalPlayer.Name, inline = true },
+        },
+        footer = { text = "Phosphy - ClickBreakers" },
+        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+    }
+end
+
+local function StartWebhookSummary()
+    StopTask("WebhookSummary")
+
+    local url = Options.WebhookURL.Value
+    if not url or url == "" then
+        Library:Notify("Webhook: Enter a URL first!")
+        Toggles.ToggleWebhookSummary:SetValue(false)
+        return
+    end
+
+    Tasks.WebhookSummary = task.spawn(function()
+        local lastEggs = PlayerData.Data.Eggs or 0
+
+        while Toggles.ToggleWebhookSummary.Value do
+            local minutes = math.clamp(tonumber(Options.WebhookSummaryMinutes.Value) or 10, 1, 60)
+            local waited = 0
+            local seconds = minutes * 60
+
+            while Toggles.ToggleWebhookSummary.Value and waited < seconds do
+                task.wait(1)
+                waited = waited + 1
+            end
+
+            if not Toggles.ToggleWebhookSummary.Value then break end
+
+            local currentEggs = PlayerData.Data.Eggs or lastEggs
+            local hatched = math.max(0, currentEggs - lastEggs)
+            lastEggs = currentEggs
+
+            local currentUrl = Options.WebhookURL.Value
+            if currentUrl and currentUrl ~= "" then
+                PostWebhook(currentUrl, "", {
+                    BuildSummaryEmbed(minutes, hatched, currentEggs),
+                })
+            end
+        end
+    end)
+end
+
 local webhookConn = nil
 
 local function InstallWebhookListener()
@@ -2679,6 +2761,20 @@ Toggles.ToggleWebhook:OnChanged(function(state)
     end
 end)
 
+Toggles.ToggleWebhookSummary:OnChanged(function(state)
+    if state then
+        StartWebhookSummary()
+    else
+        StopTask("WebhookSummary")
+    end
+end)
+
+Options.WebhookSummaryMinutes:OnChanged(function()
+    if Toggles.ToggleWebhookSummary.Value then
+        StartWebhookSummary()
+    end
+end)
+
 Library:OnUnload(function()
     if hookRefFn and hookRefOriginal then
         hookfunction(hookRefFn, hookRefOriginal)
@@ -2741,7 +2837,7 @@ ThemeManager:SetDefaultTheme({
     MainColor = Color3.fromRGB(25, 25, 25),
     AccentColor = Color3.fromRGB(0, 200, 180),
     BackgroundColor = Color3.fromRGB(15, 15, 15),
-    OutlineColor = Color3.fromRGB(40, 40, 40),
+    OutlineColor = Color3.fromRGB(0, 95, 85),
 })
 ThemeManager:ApplyToTab(Tabs["UI Settings"])
 ThemeManager:LoadDefault()
