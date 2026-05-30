@@ -234,7 +234,7 @@ local SendSummaryWebhookTest
 
 local Window = Library:CreateWindow({
     Title = "Phosphy",
-    Footer = "disc : neonbeon 1.08",
+    Footer = "disc : neonbeon 1.09",
     Icon = 111288992980872,
     Compact = true,
     SidebarCompactWidth = 56,
@@ -682,7 +682,9 @@ do
     AddCheckbox(SummaryWebhookBox, "ToggleSummaryEggs", "Eggs Hatched", true)
     AddCheckbox(SummaryWebhookBox, "ToggleSummaryRebirths", "Rebirths Gained", true)
     AddCheckbox(SummaryWebhookBox, "ToggleSummaryGems", "Gems Gained", true)
-    AddCheckbox(SummaryWebhookBox, "ToggleSummaryItems", "Items Gained", true)
+    AddCheckbox(SummaryWebhookBox, "ToggleSummarySpins", "Spins Gained", true)
+    AddCheckbox(SummaryWebhookBox, "ToggleSummaryEvilSpins", "Evil Spins Gained", true)
+    AddCheckbox(SummaryWebhookBox, "ToggleSummaryItems", "Items Net Change", true)
     AddDivider(SummaryWebhookBox, "Timer")
     AddSlider(SummaryWebhookBox, "WebhookSummaryMinutes", "Every", 1, 60, 10, "m")
     AddCheckbox(SummaryWebhookBox, "ToggleWebhookSummary", "Summary Webhook")
@@ -2679,6 +2681,8 @@ local function MakeSummarySnapshot()
         Eggs = data.Eggs or 0,
         Rebirths = data.Rebirths or 0,
         Gems = data.Gems or 0,
+        Spins = data.Spins or 0,
+        EvilSpins = data.EvilSpins or 0,
         Items = itemCounts,
     }
 end
@@ -2687,26 +2691,51 @@ local function DeltaNumber(before, after)
     return math.max(0, (after or 0) - (before or 0))
 end
 
+local function NetDeltaNumber(before, after)
+    return (after or 0) - (before or 0)
+end
+
+local function fmtSigned(n)
+    if n > 0 then
+        return "+" .. fmtNum(n)
+    elseif n < 0 then
+        return "-" .. fmtNum(math.abs(n))
+    end
+    return "0"
+end
+
 local function GetItemDelta(beforeItems, afterItems)
     local total = 0
-    local gained = {}
+    local changed = {}
+    local seen = {}
 
     for itemName, afterCount in pairs(afterItems or {}) do
-        local delta = DeltaNumber(beforeItems and beforeItems[itemName] or 0, afterCount)
-        if delta > 0 then
+        local delta = NetDeltaNumber(beforeItems and beforeItems[itemName] or 0, afterCount)
+        if delta ~= 0 then
             total = total + delta
-            table.insert(gained, { Name = itemName, Amount = delta })
+            table.insert(changed, { Name = itemName, Amount = delta })
+        end
+        seen[itemName] = true
+    end
+
+    for itemName, beforeCount in pairs(beforeItems or {}) do
+        if not seen[itemName] then
+            local delta = NetDeltaNumber(beforeCount, 0)
+            if delta ~= 0 then
+                total = total + delta
+                table.insert(changed, { Name = itemName, Amount = delta })
+            end
         end
     end
 
-    table.sort(gained, function(a, b)
-        if a.Amount == b.Amount then
+    table.sort(changed, function(a, b)
+        if math.abs(a.Amount) == math.abs(b.Amount) then
             return a.Name < b.Name
         end
-        return a.Amount > b.Amount
+        return math.abs(a.Amount) > math.abs(b.Amount)
     end)
 
-    return total, gained
+    return total, changed
 end
 
 local function IsSummaryMetricEnabled(toggleName)
@@ -2718,20 +2747,22 @@ local function HasSummaryMetricSelected()
     return IsSummaryMetricEnabled("ToggleSummaryEggs")
         or IsSummaryMetricEnabled("ToggleSummaryRebirths")
         or IsSummaryMetricEnabled("ToggleSummaryGems")
+        or IsSummaryMetricEnabled("ToggleSummarySpins")
+        or IsSummaryMetricEnabled("ToggleSummaryEvilSpins")
         or IsSummaryMetricEnabled("ToggleSummaryItems")
 end
 
-local function BuildItemsSummary(total, gained)
-    if total <= 0 then
-        return "0"
+local function BuildItemsSummary(total, changed)
+    if total == 0 and #changed == 0 then
+        return "```0```"
     end
 
-    local lines = { fmtNum(total) .. " total" }
-    for i = 1, math.min(5, #gained) do
-        table.insert(lines, gained[i].Name .. " +" .. fmtNum(gained[i].Amount))
+    local lines = { "Net: " .. fmtSigned(total) }
+    for i = 1, math.min(10, #changed) do
+        table.insert(lines, changed[i].Name .. " " .. fmtSigned(changed[i].Amount))
     end
 
-    return table.concat(lines, "\n")
+    return "```" .. table.concat(lines, "\n") .. "```"
 end
 
 local function MakeSummaryTotals()
@@ -2739,6 +2770,8 @@ local function MakeSummaryTotals()
         Eggs = 0,
         Rebirths = 0,
         Gems = 0,
+        Spins = 0,
+        EvilSpins = 0,
         Items = 0,
         ItemBreakdown = {},
     }
@@ -2748,6 +2781,8 @@ local function AddSummaryDelta(totals, beforeSnapshot, afterSnapshot)
     totals.Eggs = totals.Eggs + DeltaNumber(beforeSnapshot.Eggs, afterSnapshot.Eggs)
     totals.Rebirths = totals.Rebirths + DeltaNumber(beforeSnapshot.Rebirths, afterSnapshot.Rebirths)
     totals.Gems = totals.Gems + DeltaNumber(beforeSnapshot.Gems, afterSnapshot.Gems)
+    totals.Spins = totals.Spins + DeltaNumber(beforeSnapshot.Spins, afterSnapshot.Spins)
+    totals.EvilSpins = totals.EvilSpins + DeltaNumber(beforeSnapshot.EvilSpins, afterSnapshot.EvilSpins)
 
     local itemTotal, itemBreakdown = GetItemDelta(beforeSnapshot.Items, afterSnapshot.Items)
     totals.Items = totals.Items + itemTotal
@@ -2757,22 +2792,65 @@ local function AddSummaryDelta(totals, beforeSnapshot, afterSnapshot)
 end
 
 local function GetSortedItemBreakdown(itemBreakdown)
-    local gained = {}
+    local changed = {}
     for itemName, amount in pairs(itemBreakdown or {}) do
-        table.insert(gained, { Name = itemName, Amount = amount })
+        if amount ~= 0 then
+            table.insert(changed, { Name = itemName, Amount = amount })
+        end
     end
 
-    table.sort(gained, function(a, b)
-        if a.Amount == b.Amount then
+    table.sort(changed, function(a, b)
+        if math.abs(a.Amount) == math.abs(b.Amount) then
             return a.Name < b.Name
         end
-        return a.Amount > b.Amount
+        return math.abs(a.Amount) > math.abs(b.Amount)
     end)
 
-    return gained
+    return changed
+end
+
+local _summaryAssetCache = {}
+
+local function GetSummaryAssetId(name)
+    local raw = Items.Items and Items.Items[name]
+    if type(raw) == "string" then
+        return raw:match("%d+")
+    elseif type(raw) == "table" then
+        local image = raw.Image or raw.Icon or raw.Asset or raw.AssetId or raw.ID
+        if image then return tostring(image):match("%d+") end
+    end
+    return nil
+end
+
+local function GetSummaryAssetURL(name)
+    if _summaryAssetCache[name] ~= nil then
+        return _summaryAssetCache[name] or nil
+    end
+
+    local assetId = GetSummaryAssetId(name)
+    if not assetId then
+        _summaryAssetCache[name] = false
+        return nil
+    end
+
+    local url = ResolveAssetURL(assetId, "150x150")
+    _summaryAssetCache[name] = url or false
+    return url
+end
+
+local function GetSummaryImageURL(totals, itemBreakdown)
+    if #itemBreakdown > 0 then
+        return GetSummaryAssetURL(itemBreakdown[1].Name)
+    end
+    if totals.EvilSpins > 0 then return GetSummaryAssetURL("EvilSpins") end
+    if totals.Spins > 0 then return GetSummaryAssetURL("Spins") end
+    if totals.Gems > 0 then return GetSummaryAssetURL("Gems") end
+    if totals.Rebirths > 0 then return GetSummaryAssetURL("Rebirths") end
+    return nil
 end
 
 local function BuildSummaryEmbed(minutes, totals, isTest)
+    local itemBreakdown = GetSortedItemBreakdown(totals.ItemBreakdown)
     local fields = {
         { name = "Window", value = isTest and "Test" or tostring(minutes) .. " minute(s)", inline = true },
         { name = "Player", value = LocalPlayer.Name, inline = true },
@@ -2802,21 +2880,48 @@ local function BuildSummaryEmbed(minutes, totals, isTest)
         })
     end
 
+    if IsSummaryMetricEnabled("ToggleSummarySpins") then
+        table.insert(fields, {
+            name = "Spins Gained",
+            value = fmtNum(totals.Spins),
+            inline = true,
+        })
+    end
+
+    if IsSummaryMetricEnabled("ToggleSummaryEvilSpins") then
+        table.insert(fields, {
+            name = "Evil Spins Gained",
+            value = fmtNum(totals.EvilSpins),
+            inline = true,
+        })
+    end
+
     if IsSummaryMetricEnabled("ToggleSummaryItems") then
         table.insert(fields, {
-            name = "Items Gained",
-            value = BuildItemsSummary(totals.Items, GetSortedItemBreakdown(totals.ItemBreakdown)),
+            name = "Items Net Change",
+            value = BuildItemsSummary(totals.Items, itemBreakdown),
             inline = false,
         })
     end
 
-    return {
+    local embed = {
         title = isTest and "Summary Webhook Test" or "Progress Summary",
         color = EMBED_COLOR,
         fields = fields,
         footer = { text = "Phosphy - ClickBreakers" },
         timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
     }
+
+    if cachedAvatarURL then
+        embed.thumbnail = { url = cachedAvatarURL }
+    end
+
+    local summaryImageURL = GetSummaryImageURL(totals, itemBreakdown)
+    if summaryImageURL then
+        embed.image = { url = summaryImageURL }
+    end
+
+    return embed
 end
 
 SendAlertWebhookTest = function()
