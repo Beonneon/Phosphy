@@ -256,7 +256,22 @@ end
 table.sort(AllPetNamesList)
 
 local RarityList = { "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Exclusive", "Secret", "Celestial" }
-local GameSettingsList = { "BetterQuality", "Music", "HideOtherPets", "HideAuras" }
+local GameSettingsList = {
+    "BetterQuality",
+    "Music",
+    "Sound",
+    "Sounds",
+    "SFX",
+    "HideOtherPets",
+    "HideAuras",
+    "HideAura",
+    "HidePopups",
+    "HidePopUps",
+    "HidePopup",
+    "HidePopUp",
+    "DisablePopups",
+    "DisablePopUps",
+}
 local SummaryMetricList = {
     "Eggs Hatched",
     "Rebirths Gained",
@@ -317,7 +332,7 @@ local SendSummaryWebhookTest
 
 local Window = Library:CreateWindow({
     Title = "Phosphy",
-    Footer = "disc : neonbeon 1.18",
+    Footer = "disc : neonbeon 1.19",
     Icon = 111288992980872,
     Compact = true,
     SidebarCompactWidth = 56,
@@ -1201,12 +1216,24 @@ end
 
 Toggles.ToggleAutoPotionCraft:OnChanged(function(state)
     if state then
-        if not next(Options.PotionCraftSelect.Value) then
-            Library:Notify("Auto Potion Crafting: Select at least one potion first!")
-            Toggles.ToggleAutoPotionCraft:SetValue(false)
-            return
-        end
-        StartAutoPotionCraft()
+        task.spawn(function()
+            local waited = 0
+            while Toggles.ToggleAutoPotionCraft.Value
+                and not next(Options.PotionCraftSelect.Value)
+                and waited < 3
+            do
+                task.wait(0.1)
+                waited = waited + 0.1
+            end
+
+            if not Toggles.ToggleAutoPotionCraft.Value then return end
+            if not next(Options.PotionCraftSelect.Value) then
+                Library:Notify("Auto Potion Crafting: Select at least one potion first!")
+                Toggles.ToggleAutoPotionCraft:SetValue(false)
+                return
+            end
+            StartAutoPotionCraft()
+        end)
     else
         StopTask("AutoPotionCraft")
     end
@@ -1634,7 +1661,9 @@ local function ApplySettingsPass()
 
     for _, settingName in ipairs(GameSettingsList) do
         local current = PlayerData.Data[settingName]
-        if wantOn[settingName] and current ~= true then
+        if current == nil then
+            continue
+        elseif wantOn[settingName] and current ~= true then
             SettingsRemote:FireServer(settingName)
             task.wait(0.3)
         elseif wantOff[settingName] and current ~= false then
@@ -3292,7 +3321,22 @@ end)
 
 Toggles.ToggleWebhookSummary:OnChanged(function(state)
     if state then
-        StartWebhookSummary()
+        task.spawn(function()
+            local waited = 0
+            while Toggles.ToggleWebhookSummary.Value
+                and (not Options.WebhookSummaryURL.Value
+                    or Options.WebhookSummaryURL.Value == ""
+                    or not HasSummaryMetricSelected())
+                and waited < 3
+            do
+                task.wait(0.1)
+                waited = waited + 0.1
+            end
+
+            if Toggles.ToggleWebhookSummary.Value then
+                StartWebhookSummary()
+            end
+        end)
     else
         StopTask("WebhookSummary")
     end
@@ -3300,7 +3344,11 @@ end)
 
 Options.WebhookSummaryMinutes:OnChanged(function()
     if Toggles.ToggleWebhookSummary.Value then
-        StartWebhookSummary()
+        task.delay(0.75, function()
+            if Toggles.ToggleWebhookSummary.Value then
+                StartWebhookSummary()
+            end
+        end)
     end
 end)
 
