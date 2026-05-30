@@ -3,6 +3,41 @@ local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
 local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
 local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
 
+local PhosphyIcon = "rbxassetid://111288992980872"
+
+if Library.AddDraggableButton then
+    local AddDraggableButton = Library.AddDraggableButton
+    function Library:AddDraggableButton(text, callback, excludeScaling, excludeDragging)
+        local buttonData = AddDraggableButton(self, text, callback, excludeScaling, excludeDragging)
+        if text == "Toggle" and buttonData and buttonData.Button then
+            local button = buttonData.Button
+            button.Text = ""
+            button.Size = UDim2.fromOffset(44, 44)
+
+            local icon = Instance.new("ImageLabel")
+            icon.Name = "PhosphyToggleIcon"
+            icon.AnchorPoint = Vector2.new(0.5, 0.5)
+            icon.BackgroundTransparency = 1
+            icon.Image = PhosphyIcon
+            icon.Position = UDim2.fromScale(0.5, 0.5)
+            icon.Size = UDim2.fromOffset(34, 34)
+            icon.ZIndex = button.ZIndex + 1
+            icon.Parent = button
+
+            local SetText = buttonData.SetText
+            function buttonData:SetText(newText)
+                if newText == "Toggle" then
+                    button.Text = ""
+                    button.Size = UDim2.fromOffset(44, 44)
+                    return
+                end
+                return SetText(self, newText)
+            end
+        end
+        return buttonData
+    end
+end
+
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
@@ -233,6 +268,8 @@ local Window = Library:CreateWindow({
     Title = "Phosphy",
     Footer = "disc : neonbeon 1.03",
     Icon = 111288992980872,
+    Compact = true,
+    SidebarCompactWidth = 56,
     NotifySide = "Right",
     ShowCustomCursor = false,
     UnlockMouseWhileOpen = false,
