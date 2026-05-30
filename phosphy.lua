@@ -232,7 +232,7 @@ local Toggles = Library.Toggles
 
 local Window = Library:CreateWindow({
     Title = "Phosphy",
-    Footer = "disc : neonbeon 1.06",
+    Footer = "disc : neonbeon 1.07",
     Icon = 111288992980872,
     Compact = true,
     SidebarCompactWidth = 56,
@@ -242,12 +242,12 @@ local Window = Library:CreateWindow({
 })
 
 local Tabs = {
-    Main = Window:AddTab("", "user"),
-    Pets = Window:AddTab("", "paw-print"),
-    Performance = Window:AddTab("", "zap"),
-    Webhook = Window:AddTab("", "bell"),
-    Misc = Window:AddTab("", "settings"),
-    ["UI Settings"] = Window:AddTab("", "folder-cog"),
+    Main = Window:AddTab("Main", "user"),
+    Pets = Window:AddTab("Pets", "paw-print"),
+    Performance = Window:AddTab("Performance", "zap"),
+    Webhook = Window:AddTab("Webhook", "bell"),
+    Misc = Window:AddTab("Misc", "settings"),
+    ["UI Settings"] = Window:AddTab("UI Settings", "folder-cog"),
 }
 
 local IndexStatusImage
@@ -338,12 +338,13 @@ do
     AddCheckbox(AutoIndexBox, "ToggleAutoClaimIndexReward", "Auto Claim Index Reward")
     AddCheckbox(AutoIndexBox, "ToggleAutoIndex", "Auto Index")
 
-    local GoldenBox = Tabs.Pets:AddRightGroupbox("Golden Machine", "star")
+    local MachineTabs = Tabs.Pets:AddRightTabbox("Pet Machines")
+    local GoldenBox = MachineTabs:AddTab("Golden", "star")
     AddDropdown(GoldenBox, "GoldenPetSelect", "Pets", CraftPetList, {}, true)
     AddDropdown(GoldenBox, "GoldenSuccessRate", "Success Rate", CraftSuccessRates, "100%", false)
     AddCheckbox(GoldenBox, "ToggleAutoGolden", "Auto Craft Golden")
 
-    local DiamondBox = Tabs.Pets:AddRightGroupbox("Diamond Machine", "diamond")
+    local DiamondBox = MachineTabs:AddTab("Diamond", "diamond")
     AddDropdown(DiamondBox, "DiamondPetSelect", "Pets", CraftPetList, {}, true)
     AddDropdown(DiamondBox, "DiamondSuccessRate", "Success Rate", CraftSuccessRates, "100%", false)
     AddCheckbox(DiamondBox, "ToggleAutoDiamond", "Auto Craft Diamond")
@@ -631,14 +632,16 @@ do
     local MiscBox = Tabs.Misc:AddRightGroupbox("Misc", "shield")
     AddCheckbox(MiscBox, "ToggleDisableAutoRejoin", "Disable Auto Rejoin")
 
-    local PerformanceBox = Tabs.Performance:AddLeftGroupbox("Performance", "zap")
+    local PerformanceTabs = Tabs.Performance:AddLeftTabbox("Performance")
+    local PerformanceBox = PerformanceTabs:AddTab("Boost", "zap")
+    local FpsCapBox = PerformanceTabs:AddTab("FPS Cap", "monitor")
+    local Render3DBox = PerformanceTabs:AddTab("3D", "eye-off")
+
     AddCheckbox(PerformanceBox, "TogglePerformance", "Enable Performance")
 
-    local FpsCapBox = Tabs.Performance:AddRightGroupbox("FPS Cap", "monitor")
     FpsCapBox:AddInput("FpsCapValue", { Text = "FPS Limit", Placeholder = "e.g. 60" })
     AddCheckbox(FpsCapBox, "ToggleFpsCap", "Enable FPS Cap")
 
-    local Render3DBox = Tabs.Performance:AddLeftGroupbox("3D Rendering", "eye-off")
     AddCheckbox(Render3DBox, "ToggleDisable3D", "Disable 3D Rendering")
 
     local AutoSettingsBox = Tabs.Misc:AddRightGroupbox("Auto Settings", "sliders")
