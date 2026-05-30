@@ -195,12 +195,14 @@ local SummaryMetricList = {
     "Eggs Hatched",
     "Rebirths Gained",
     "Gems Gained",
+    "Tokens Gained",
     "Spins Gained",
     "Evil Spins Gained",
     "Items Net Change",
     "Total Clicks",
     "Total Rebirths",
     "Total Gems",
+    "Total Tokens",
     "Total Eggs Hatched",
     "Total Time Played",
 }
@@ -249,7 +251,7 @@ local SendSummaryWebhookTest
 
 local Window = Library:CreateWindow({
     Title = "Phosphy",
-    Footer = "disc : neonbeon 1.14",
+    Footer = "disc : neonbeon 1.15",
     Icon = 111288992980872,
     Compact = true,
     SidebarCompactWidth = 56,
@@ -2711,6 +2713,7 @@ local function MakeSummarySnapshot()
         Eggs = pickNumber({ "TotalEggsHatched", "EggsHatchedTotal", "TotalEggs", "EggsTotal", "EggsHatched", "Eggs" }),
         Rebirths = pickNumber({ "TotalRebirths", "RebirthsTotal", "TotalRebirth", "RebirthTotal", "Rebirths" }),
         Gems = pickNumber({ "TotalGems", "GemsTotal", "TotalGem", "GemTotal", "GemsEarned", "Gems" }),
+        Tokens = pickNumber({ "TotalTokens", "TokensTotal", "TotalToken", "TokenTotal", "TokensEarned", "Tokens" }),
         Spins = data.Spins or 0,
         EvilSpins = data.EvilSpins or 0,
         Items = itemCounts,
@@ -2796,6 +2799,7 @@ local function MakeSummaryTotals()
         Eggs = 0,
         Rebirths = 0,
         Gems = 0,
+        Tokens = 0,
         Spins = 0,
         EvilSpins = 0,
         Items = 0,
@@ -2807,6 +2811,7 @@ local function AddSummaryDelta(totals, beforeSnapshot, afterSnapshot)
     totals.Eggs = totals.Eggs + DeltaNumber(beforeSnapshot.Eggs, afterSnapshot.Eggs)
     totals.Rebirths = totals.Rebirths + DeltaNumber(beforeSnapshot.Rebirths, afterSnapshot.Rebirths)
     totals.Gems = totals.Gems + DeltaNumber(beforeSnapshot.Gems, afterSnapshot.Gems)
+    totals.Tokens = totals.Tokens + DeltaNumber(beforeSnapshot.Tokens, afterSnapshot.Tokens)
     totals.Spins = totals.Spins + DeltaNumber(beforeSnapshot.Spins, afterSnapshot.Spins)
     totals.EvilSpins = totals.EvilSpins + DeltaNumber(beforeSnapshot.EvilSpins, afterSnapshot.EvilSpins)
 
@@ -3003,6 +3008,7 @@ local function BuildSummaryMetricEntries(totals, itemBreakdown)
     AddSummaryMetric(entries, "Eggs Hatched", fmtNum(totals.Eggs), "ExclusiveEgg")
     AddSummaryMetric(entries, "Rebirths Gained", fmtNum(totals.Rebirths), "Rebirths")
     AddSummaryMetric(entries, "Gems Gained", fmtNum(totals.Gems), "Gems")
+    AddSummaryMetric(entries, "Tokens Gained", fmtNum(totals.Tokens), "Tokens")
     AddSummaryMetric(entries, "Spins Gained", fmtNum(totals.Spins), "Spins")
     AddSummaryMetric(entries, "Evil Spins Gained", fmtNum(totals.EvilSpins), "EvilSpins")
     AddSummaryMetric(entries, "Items Net Change", BuildItemsSummary(totals.Items, itemBreakdown), itemBreakdown[1] and itemBreakdown[1].Name or "Surprise Box")
@@ -3024,6 +3030,12 @@ local function BuildSummaryMetricEntries(totals, itemBreakdown)
         "TotalGem",
         "GemTotal",
     }, { "Gems" }), "Gems")
+    AddSummaryMetric(entries, "Total Tokens", GetDisplayStat({
+        "TotalTokens",
+        "TokensTotal",
+        "TotalToken",
+        "TokenTotal",
+    }, { "Tokens" }), "Tokens")
     AddSummaryMetric(entries, "Total Eggs Hatched", GetDisplayStat({
         "TotalEggsHatched",
         "EggsHatchedTotal",
