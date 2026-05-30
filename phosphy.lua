@@ -229,10 +229,12 @@ end
 
 local Options = Library.Options
 local Toggles = Library.Toggles
+local SendAlertWebhookTest
+local SendSummaryWebhookTest
 
 local Window = Library:CreateWindow({
     Title = "Phosphy",
-    Footer = "disc : neonbeon 1.07",
+    Footer = "disc : neonbeon 1.08",
     Icon = 111288992980872,
     Compact = true,
     SidebarCompactWidth = 56,
@@ -657,11 +659,30 @@ do
     WebhookBox:AddInput("WebhookURL", { Text = "Webhook URL", Placeholder = "discord.com/api/webhooks/..." })
     WebhookBox:AddInput("WebhookPingID", { Text = "Ping ID", Placeholder = "User or Role ID" })
     AddDropdown(WebhookBox, "WebhookPingType", "Ping Type", PingTypes, "None", false)
+    WebhookBox:AddButton({
+        Text = "Test Alert Webhook",
+        Func = function()
+            if SendAlertWebhookTest then SendAlertWebhookTest() end
+        end,
+    })
     AddDivider(WebhookBox, "Hatches")
     AddDropdown(WebhookBox, "WebhookNotifyRarities", "Notify Rarities", RarityList, {}, true)
     AddDropdown(WebhookBox, "WebhookPingRarities", "Ping Rarities", RarityList, {}, true)
     AddCheckbox(WebhookBox, "ToggleWebhook", "Enable Webhook")
 
+    AddDivider(SummaryWebhookBox, "Discord")
+    SummaryWebhookBox:AddInput("WebhookSummaryURL", { Text = "Summary Webhook URL", Placeholder = "discord.com/api/webhooks/..." })
+    SummaryWebhookBox:AddButton({
+        Text = "Test Summary Webhook",
+        Func = function()
+            if SendSummaryWebhookTest then SendSummaryWebhookTest() end
+        end,
+    })
+    AddDivider(SummaryWebhookBox, "Metrics")
+    AddCheckbox(SummaryWebhookBox, "ToggleSummaryEggs", "Eggs Hatched", true)
+    AddCheckbox(SummaryWebhookBox, "ToggleSummaryRebirths", "Rebirths Gained", true)
+    AddCheckbox(SummaryWebhookBox, "ToggleSummaryGems", "Gems Gained", true)
+    AddCheckbox(SummaryWebhookBox, "ToggleSummaryItems", "Items Gained", true)
     AddDivider(SummaryWebhookBox, "Timer")
     AddSlider(SummaryWebhookBox, "WebhookSummaryMinutes", "Every", 1, 60, 10, "m")
     AddCheckbox(SummaryWebhookBox, "ToggleWebhookSummary", "Summary Webhook")
@@ -2627,6 +2648,8 @@ local function BuildEmbed(petName, rarity, petType, petImageURL, playerAvatarURL
 end
 
 local function PostWebhook(url, content, embeds)
+    if not httpReq then return false end
+
     local payload = HttpService:JSONEncode({
         username = "Phosphy",
         avatar_url = PhosphyIconURL or nil,
@@ -2634,63 +2657,257 @@ local function PostWebhook(url, content, embeds)
         embeds = embeds,
     })
 
-    pcall(httpReq, {
+    local ok = pcall(httpReq, {
         Url = url,
         Method = "POST",
         Headers = { ["Content-Type"] = "application/json" },
         Body = payload,
     })
+    return ok
 end
 
-local function BuildSummaryEmbed(minutes, hatched, totalEggs)
+local function MakeSummarySnapshot()
+    local itemCounts = {}
+    local data = PlayerData.Data or {}
+    for itemName, count in pairs(data.Items or {}) do
+        if type(count) == "number" then
+            itemCounts[itemName] = count
+        end
+    end
+
     return {
-        title = "Egg Summary",
+        Eggs = data.Eggs or 0,
+        Rebirths = data.Rebirths or 0,
+        Gems = data.Gems or 0,
+        Items = itemCounts,
+    }
+end
+
+local function DeltaNumber(before, after)
+    return math.max(0, (after or 0) - (before or 0))
+end
+
+local function GetItemDelta(beforeItems, afterItems)
+    local total = 0
+    local gained = {}
+
+    for itemName, afterCount in pairs(afterItems or {}) do
+        local delta = DeltaNumber(beforeItems and beforeItems[itemName] or 0, afterCount)
+        if delta > 0 then
+            total = total + delta
+            table.insert(gained, { Name = itemName, Amount = delta })
+        end
+    end
+
+    table.sort(gained, function(a, b)
+        if a.Amount == b.Amount then
+            return a.Name < b.Name
+        end
+        return a.Amount > b.Amount
+    end)
+
+    return total, gained
+end
+
+local function IsSummaryMetricEnabled(toggleName)
+    local toggle = Toggles[toggleName]
+    return toggle and toggle.Value == true
+end
+
+local function HasSummaryMetricSelected()
+    return IsSummaryMetricEnabled("ToggleSummaryEggs")
+        or IsSummaryMetricEnabled("ToggleSummaryRebirths")
+        or IsSummaryMetricEnabled("ToggleSummaryGems")
+        or IsSummaryMetricEnabled("ToggleSummaryItems")
+end
+
+local function BuildItemsSummary(total, gained)
+    if total <= 0 then
+        return "0"
+    end
+
+    local lines = { fmtNum(total) .. " total" }
+    for i = 1, math.min(5, #gained) do
+        table.insert(lines, gained[i].Name .. " +" .. fmtNum(gained[i].Amount))
+    end
+
+    return table.concat(lines, "\n")
+end
+
+local function MakeSummaryTotals()
+    return {
+        Eggs = 0,
+        Rebirths = 0,
+        Gems = 0,
+        Items = 0,
+        ItemBreakdown = {},
+    }
+end
+
+local function AddSummaryDelta(totals, beforeSnapshot, afterSnapshot)
+    totals.Eggs = totals.Eggs + DeltaNumber(beforeSnapshot.Eggs, afterSnapshot.Eggs)
+    totals.Rebirths = totals.Rebirths + DeltaNumber(beforeSnapshot.Rebirths, afterSnapshot.Rebirths)
+    totals.Gems = totals.Gems + DeltaNumber(beforeSnapshot.Gems, afterSnapshot.Gems)
+
+    local itemTotal, itemBreakdown = GetItemDelta(beforeSnapshot.Items, afterSnapshot.Items)
+    totals.Items = totals.Items + itemTotal
+    for _, entry in ipairs(itemBreakdown) do
+        totals.ItemBreakdown[entry.Name] = (totals.ItemBreakdown[entry.Name] or 0) + entry.Amount
+    end
+end
+
+local function GetSortedItemBreakdown(itemBreakdown)
+    local gained = {}
+    for itemName, amount in pairs(itemBreakdown or {}) do
+        table.insert(gained, { Name = itemName, Amount = amount })
+    end
+
+    table.sort(gained, function(a, b)
+        if a.Amount == b.Amount then
+            return a.Name < b.Name
+        end
+        return a.Amount > b.Amount
+    end)
+
+    return gained
+end
+
+local function BuildSummaryEmbed(minutes, totals, isTest)
+    local fields = {
+        { name = "Window", value = isTest and "Test" or tostring(minutes) .. " minute(s)", inline = true },
+        { name = "Player", value = LocalPlayer.Name, inline = true },
+    }
+
+    if IsSummaryMetricEnabled("ToggleSummaryEggs") then
+        table.insert(fields, {
+            name = "Eggs Hatched",
+            value = fmtNum(totals.Eggs),
+            inline = true,
+        })
+    end
+
+    if IsSummaryMetricEnabled("ToggleSummaryRebirths") then
+        table.insert(fields, {
+            name = "Rebirths Gained",
+            value = fmtNum(totals.Rebirths),
+            inline = true,
+        })
+    end
+
+    if IsSummaryMetricEnabled("ToggleSummaryGems") then
+        table.insert(fields, {
+            name = "Gems Gained",
+            value = fmtNum(totals.Gems),
+            inline = true,
+        })
+    end
+
+    if IsSummaryMetricEnabled("ToggleSummaryItems") then
+        table.insert(fields, {
+            name = "Items Gained",
+            value = BuildItemsSummary(totals.Items, GetSortedItemBreakdown(totals.ItemBreakdown)),
+            inline = false,
+        })
+    end
+
+    return {
+        title = isTest and "Summary Webhook Test" or "Progress Summary",
         color = EMBED_COLOR,
-        fields = {
-            { name = "Window", value = tostring(minutes) .. " minute(s)", inline = true },
-            { name = "Hatched", value = tostring(hatched), inline = true },
-            { name = "Total Eggs", value = tostring(totalEggs), inline = true },
-            { name = "Player", value = LocalPlayer.Name, inline = true },
-        },
+        fields = fields,
         footer = { text = "Phosphy - ClickBreakers" },
         timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
     }
 end
 
+SendAlertWebhookTest = function()
+    local url = Options.WebhookURL.Value
+    if not url or url == "" then
+        Library:Notify("Alert Webhook: Enter a URL first!")
+        return
+    end
+
+    local ok = PostWebhook(url, "", {
+        {
+            title = "Alert Webhook Test",
+            color = EMBED_COLOR,
+            fields = {
+                { name = "Player", value = LocalPlayer.Name, inline = true },
+                { name = "Webhook", value = "Alerts", inline = true },
+            },
+            footer = { text = "Phosphy - ClickBreakers" },
+            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+        },
+    })
+    Library:Notify(ok and "Alert webhook test sent!" or "Alert webhook test failed.")
+end
+
+SendSummaryWebhookTest = function()
+    local url = Options.WebhookSummaryURL.Value
+    if not url or url == "" then
+        Library:Notify("Summary Webhook: Enter a URL first!")
+        return
+    end
+    if not HasSummaryMetricSelected() then
+        Library:Notify("Summary Webhook: Select at least one metric!")
+        return
+    end
+
+    local totals = MakeSummaryTotals()
+    local ok = PostWebhook(url, "", {
+        BuildSummaryEmbed(tonumber(Options.WebhookSummaryMinutes.Value) or 10, totals, true),
+    })
+    Library:Notify(ok and "Summary webhook test sent!" or "Summary webhook test failed.")
+end
+
 local function StartWebhookSummary()
     StopTask("WebhookSummary")
 
-    local url = Options.WebhookURL.Value
+    local url = Options.WebhookSummaryURL.Value
     if not url or url == "" then
-        Library:Notify("Webhook: Enter a URL first!")
+        Library:Notify("Summary Webhook: Enter a URL first!")
+        Toggles.ToggleWebhookSummary:SetValue(false)
+        return
+    end
+    if not HasSummaryMetricSelected() then
+        Library:Notify("Summary Webhook: Select at least one metric!")
         Toggles.ToggleWebhookSummary:SetValue(false)
         return
     end
 
     Tasks.WebhookSummary = task.spawn(function()
-        local lastEggs = PlayerData.Data.Eggs or 0
+        local lastSnapshot = MakeSummarySnapshot()
 
         while Toggles.ToggleWebhookSummary.Value do
             local minutes = math.clamp(tonumber(Options.WebhookSummaryMinutes.Value) or 10, 1, 60)
             local waited = 0
             local seconds = minutes * 60
+            local totals = MakeSummaryTotals()
 
             while Toggles.ToggleWebhookSummary.Value and waited < seconds do
                 task.wait(1)
+                local currentSnapshot = MakeSummarySnapshot()
+                AddSummaryDelta(totals, lastSnapshot, currentSnapshot)
+                lastSnapshot = currentSnapshot
                 waited = waited + 1
             end
 
             if not Toggles.ToggleWebhookSummary.Value then break end
 
-            local currentEggs = PlayerData.Data.Eggs or lastEggs
-            local hatched = math.max(0, currentEggs - lastEggs)
-            lastEggs = currentEggs
+            if not HasSummaryMetricSelected() then
+                Library:Notify("Summary Webhook: Select at least one metric!")
+                Toggles.ToggleWebhookSummary:SetValue(false)
+                break
+            end
 
-            local currentUrl = Options.WebhookURL.Value
+            local currentUrl = Options.WebhookSummaryURL.Value
             if currentUrl and currentUrl ~= "" then
                 PostWebhook(currentUrl, "", {
-                    BuildSummaryEmbed(minutes, hatched, currentEggs),
+                    BuildSummaryEmbed(minutes, totals, false),
                 })
+            else
+                Library:Notify("Summary Webhook: URL is empty. Stopping.")
+                Toggles.ToggleWebhookSummary:SetValue(false)
+                break
             end
         end
     end)
