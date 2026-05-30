@@ -125,10 +125,8 @@ for i, amount in ipairs(RebirthsModule.Rebirths) do
     table.insert(RebirthTiers, label)
     RebirthTierKeys[label] = i
 end
-if table.find(PlayerData.Data.Passes, "InfinityRebirth") then
-    table.insert(RebirthTiers, "Infinity Rebirth")
-    RebirthTierKeys["Infinity Rebirth"] = "Inf"
-end
+table.insert(RebirthTiers, "Infinity Rebirth")
+RebirthTierKeys["Infinity Rebirth"] = "Inf"
 
 local UpgradeList = {}
 local UpgradeDefaultSelected = {}
@@ -234,7 +232,7 @@ local SendSummaryWebhookTest
 
 local Window = Library:CreateWindow({
     Title = "Phosphy",
-    Footer = "disc : neonbeon 1.09",
+    Footer = "disc : neonbeon 1.10",
     Icon = 111288992980872,
     Compact = true,
     SidebarCompactWidth = 56,
@@ -265,6 +263,7 @@ do
 
     local ARBox = Tabs.Main:AddLeftGroupbox("Auto Rebirth", "refresh-cw")
     AddDropdown(ARBox, "RebirthTier", "Tier", RebirthTiers, RebirthTiers[1], false)
+    ARBox:AddInput("InfRebirthDelay", { Text = "Inf Delay (s)", Default = "0.5", Placeholder = "Minimum 0.01" })
     AddCheckbox(ARBox, "ToggleAutoRebirth", "Auto Rebirth")
 
     local SpinBox = Tabs.Main:AddLeftGroupbox("Auto Spin", "rotate-cw")
@@ -885,11 +884,17 @@ local function canAffordRebirth(label)
     if not key then return false end
 
     if key == "Inf" then
-        return PlayerData.Data.Rebirths > 0 and PlayerData.Data.Clicks >= 100 * PlayerData.Data.Rebirths
+        return true
     end
 
     local cost = RebirthsModule.Rebirths[key] * 100 * (1 + PlayerData.Data.Rebirths)
     return PlayerData.Data.Clicks >= cost
+end
+
+local function GetInfRebirthDelay()
+    local raw = Options.InfRebirthDelay and Options.InfRebirthDelay.Value
+    local delay = tonumber(raw) or 0.5
+    return math.max(0.01, delay)
 end
 
 local function StartAutoRebirth()
@@ -901,7 +906,7 @@ local function StartAutoRebirth()
 
             if key and canAffordRebirth(label) then
                 RebirthRemote:FireServer(key)
-                task.wait(0.5)
+                task.wait(key == "Inf" and GetInfRebirthDelay() or 0.5)
             else
                 task.wait(0.5)
             end
