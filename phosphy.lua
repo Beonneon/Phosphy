@@ -266,7 +266,7 @@ local Toggles = Library.Toggles
 
 local Window = Library:CreateWindow({
     Title = "Phosphy",
-    Footer = "disc : neonbeon 1.03",
+    Footer = "disc : neonbeon 1.04",
     Icon = 111288992980872,
     Compact = true,
     SidebarCompactWidth = 56,
