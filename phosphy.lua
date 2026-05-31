@@ -2652,6 +2652,9 @@ Toggles.ToggleProgressionRebirth:OnChanged(function(state)
     end
 end)
 
+PhosphyWebhookCleanup = nil
+
+do
 local EMBED_COLOR = 0x00C8B4
 local httpReq = (syn and syn.request) or (http and http.request) or request
 
@@ -3352,6 +3355,14 @@ Options.WebhookSummaryMinutes:OnChanged(function()
     end
 end)
 
+PhosphyWebhookCleanup = function()
+    if webhookConn then
+        webhookConn:Disconnect()
+        webhookConn = nil
+    end
+end
+end
+
 Library:OnUnload(function()
     if hookRefFn and hookRefOriginal then
         hookfunction(hookRefFn, hookRefOriginal)
@@ -3380,9 +3391,9 @@ Library:OnUnload(function()
         autoConfirmTradeConn:Disconnect()
         autoConfirmTradeConn = nil
     end
-    if webhookConn then
-        webhookConn:Disconnect()
-        webhookConn = nil
+    if PhosphyWebhookCleanup then
+        PhosphyWebhookCleanup()
+        PhosphyWebhookCleanup = nil
     end
 
     currentTradePartner = nil
