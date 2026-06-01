@@ -2458,29 +2458,7 @@ function PhosphyAddAutoTradeOffer(partnerName)
 end
 
 function PhosphyHasAutoTradeAssets()
-    if PhosphyGetTradeTokenAmount() > 0 then
-        return true
-    end
-
-    local ok, exclusiveEggs = pcall(function()
-        return require(Modules:WaitForChild("ExclusiveEggs"))
-    end)
-
-    if ok and type(exclusiveEggs) == "table" then
-        for eggName in pairs(exclusiveEggs.ExclusiveEggs or exclusiveEggs) do
-            if PhosphyGetExclusiveEggAmount(eggName) > 0 then
-                return true
-            end
-        end
-    else
-        for _, eggName in ipairs({ "MoltenEgg", "CandyEgg", "SpringEgg", "ExclusiveEgg" }) do
-            if PhosphyGetExclusiveEggAmount(eggName) > 0 then
-                return true
-            end
-        end
-    end
-
-    return false
+    return PhosphyGetTradeTokenAmount() > 0
 end
 
 function PhosphyInstallAutoTradeOfferListener()
