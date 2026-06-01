@@ -2326,15 +2326,22 @@ end)
 
 local autoConfirmTradeConn = nil
 local currentTradePartner = nil
+PhosphyTradeOfferBusy = false
+PhosphyTradeOfferPartner = nil
+PhosphyAutoConfirmRunId = 0
+
+function PhosphyHasAutoTradeOfferEnabled()
+    return Toggles.ToggleAutoTradeTokens.Value or Toggles.ToggleAutoTradeExclusiveEggs.Value
+end
 
 function PhosphyGetAutoTradeOfferDelay()
-    if not (Toggles.ToggleAutoTradeTokens.Value or Toggles.ToggleAutoTradeExclusiveEggs.Value) then
+    if not PhosphyHasAutoTradeOfferEnabled() then
         return 0.75
     end
 
     local seconds = 1
     if Toggles.ToggleAutoTradeTokens.Value and (tonumber(PlayerData.Data.Tokens) or 0) > 0 then
-        seconds = seconds + 0.3
+        seconds = seconds + ((tonumber(PlayerData.Data.Tokens) or 0) * 0.12)
     end
     if Toggles.ToggleAutoTradeExclusiveEggs.Value then
         local exclusiveEggs = require(Modules:WaitForChild("ExclusiveEggs"))
@@ -2346,45 +2353,64 @@ function PhosphyGetAutoTradeOfferDelay()
     return math.max(seconds, 0.75)
 end
 
+function PhosphyQueueAutoTradeConfirm(partnerName)
+    if not partnerName then return end
+
+    PhosphyAutoConfirmRunId = PhosphyAutoConfirmRunId + 1
+    local runId = PhosphyAutoConfirmRunId
+
+    task.spawn(function()
+        local waited = 0
+        local maxWait = PhosphyGetAutoTradeOfferDelay() + 5
+
+        while Toggles.ToggleAutoConfirmTrade.Value
+            and currentTradePartner == partnerName
+            and PhosphyTradeOfferBusy
+            and waited < maxWait
+        do
+            task.wait(0.1)
+            waited = waited + 0.1
+        end
+
+        task.wait(0.35)
+        if runId ~= PhosphyAutoConfirmRunId then return end
+        if not Toggles.ToggleAutoConfirmTrade.Value then return end
+        if currentTradePartner ~= partnerName then return end
+
+        local partner = Players:FindFirstChild(partnerName)
+        if partner then
+            TradeRemote:FireServer({ "AcceptTrade", partner })
+        end
+    end)
+end
+
 local function InstallAutoConfirmTrade()
     if autoConfirmTradeConn then
         autoConfirmTradeConn:Disconnect()
         autoConfirmTradeConn = nil
     end
 
-    local confirmDebounce = nil
     autoConfirmTradeConn = TradeRemote.OnClientEvent:Connect(function(eventType, partnerName)
         if not Toggles.ToggleAutoConfirmTrade.Value then return end
 
         if eventType == "CreateTrade" then
             currentTradePartner = partnerName
+            if PhosphyHasAutoTradeOfferEnabled() then
+                PhosphyTradeOfferBusy = true
+                PhosphyTradeOfferPartner = partnerName
+            end
         elseif eventType == "ClearTrade" or eventType == "TradeEnd" then
             currentTradePartner = nil
-            if confirmDebounce then
-                task.cancel(confirmDebounce)
-                confirmDebounce = nil
-            end
+            PhosphyAutoConfirmRunId = PhosphyAutoConfirmRunId + 1
+            PhosphyTradeOfferBusy = false
+            PhosphyTradeOfferPartner = nil
             return
         end
 
         if eventType ~= "CreateTrade" and eventType ~= "Cancel" then return end
         if not currentTradePartner then return end
 
-        if confirmDebounce then
-            task.cancel(confirmDebounce)
-            confirmDebounce = nil
-        end
-
-        confirmDebounce = task.delay(PhosphyGetAutoTradeOfferDelay(), function()
-            confirmDebounce = nil
-            if not Toggles.ToggleAutoConfirmTrade.Value then return end
-            if not currentTradePartner then return end
-
-            local partner = Players:FindFirstChild(currentTradePartner)
-            if partner then
-                TradeRemote:FireServer({ "AcceptTrade", partner })
-            end
-        end)
+        PhosphyQueueAutoTradeConfirm(currentTradePartner)
     end)
 end
 
@@ -2405,15 +2431,18 @@ local autoTradeOfferConn = nil
 function PhosphyAddAutoTradeOffer(partnerName)
     if not partnerName then return end
     StopTask("AutoTradeOffer")
+    PhosphyTradeOfferBusy = true
+    PhosphyTradeOfferPartner = partnerName
 
     Tasks.AutoTradeOffer = task.spawn(function()
         task.wait(0.75)
 
         if Toggles.ToggleAutoTradeTokens.Value then
             local tokens = tonumber(PlayerData.Data.Tokens) or 0
-            if tokens > 0 then
-                TradeRemote:FireServer({ "AddTokens", tokens, partnerName })
-                task.wait(0.2)
+            for _ = 1, tokens do
+                if not Toggles.ToggleAutoTradeTokens.Value then break end
+                TradeRemote:FireServer({ "AddTokens", 1, partnerName })
+                task.wait(0.1)
             end
         end
 
@@ -2429,6 +2458,12 @@ function PhosphyAddAutoTradeOffer(partnerName)
                     task.wait(0.12)
                 end
             end
+        end
+
+        PhosphyTradeOfferBusy = false
+        PhosphyTradeOfferPartner = nil
+        if Toggles.ToggleAutoConfirmTrade.Value and currentTradePartner == partnerName then
+            PhosphyQueueAutoTradeConfirm(partnerName)
         end
     end)
 end
@@ -2456,17 +2491,19 @@ function PhosphyInstallAutoTradeOfferListener()
 
     autoTradeOfferConn = TradeRemote.OnClientEvent:Connect(function(eventType, partnerName)
         if eventType == "CreateTrade" then
-            if Toggles.ToggleAutoTradeTokens.Value or Toggles.ToggleAutoTradeExclusiveEggs.Value then
+            if PhosphyHasAutoTradeOfferEnabled() then
                 PhosphyAddAutoTradeOffer(partnerName)
             end
         elseif eventType == "ClearTrade" or eventType == "TradeEnd" then
             StopTask("AutoTradeOffer")
+            PhosphyTradeOfferBusy = false
+            PhosphyTradeOfferPartner = nil
         end
     end)
 end
 
 function PhosphyUpdateAutoTradeOfferListener()
-    if Toggles.ToggleAutoTradeTokens.Value or Toggles.ToggleAutoTradeExclusiveEggs.Value then
+    if PhosphyHasAutoTradeOfferEnabled() then
         PhosphyInstallAutoTradeOfferListener()
     else
         if autoTradeOfferConn then
@@ -2474,6 +2511,8 @@ function PhosphyUpdateAutoTradeOfferListener()
             autoTradeOfferConn = nil
         end
         StopTask("AutoTradeOffer")
+        PhosphyTradeOfferBusy = false
+        PhosphyTradeOfferPartner = nil
     end
 end
 
