@@ -34,7 +34,6 @@ local Format = require(Modules:WaitForChild("Format"))
 local CodesModule = require(Modules:WaitForChild("Codes"))
 local AurasModule = require(Modules:WaitForChild("Auras"))
 local TapSkinsModule = require(Modules:WaitForChild("TapSkins"))
-local ExclusiveEggsModule = require(Modules:WaitForChild("ExclusiveEggs"))
 
 repeat task.wait(0.1) until PlayerData.Data and PlayerData.Data.Items
 
@@ -273,7 +272,7 @@ local GameSettingsList = {
     "DisablePopups",
     "DisablePopUps",
 }
-local SummaryMetricList = {
+PhosphySummaryMetricList = {
     "Eggs Hatched",
     "Rebirths Gained",
     "Gems Gained",
@@ -288,7 +287,7 @@ local SummaryMetricList = {
     "Total Eggs Hatched",
     "Total Time Played",
 }
-local SummaryLeaderboardList = {
+PhosphySummaryLeaderboardList = {
     "Total Gems",
     "Total Eggs",
     "Total Clicks",
@@ -296,13 +295,13 @@ local SummaryLeaderboardList = {
     "Time Played",
     "Robux",
 }
-local SummaryMetricDefaultSelected = {}
-for _, metricName in ipairs(SummaryMetricList) do
-    SummaryMetricDefaultSelected[metricName] = true
+PhosphySummaryMetricDefaultSelected = {}
+for _, metricName in ipairs(PhosphySummaryMetricList) do
+    PhosphySummaryMetricDefaultSelected[metricName] = true
 end
-local SummaryLeaderboardDefaultSelected = {}
-for _, leaderboardName in ipairs(SummaryLeaderboardList) do
-    SummaryLeaderboardDefaultSelected[leaderboardName] = true
+PhosphySummaryLeaderboardDefaultSelected = {}
+for _, leaderboardName in ipairs(PhosphySummaryLeaderboardList) do
+    PhosphySummaryLeaderboardDefaultSelected[leaderboardName] = true
 end
 
 local shopData = {}
@@ -340,8 +339,6 @@ end
 
 local Options = Library.Options
 local Toggles = Library.Toggles
-local SendAlertWebhookTest
-local SendSummaryWebhookTest
 
 local Window = Library:CreateWindow({
     Title = "Phosphy",
@@ -794,14 +791,14 @@ do
         end,
     })
     AddDivider(SummaryWebhookBox, "Metrics")
-    AddDropdown(SummaryWebhookBox, "SummaryMetrics", "Summary Metrics", SummaryMetricList, SummaryMetricDefaultSelected, true)
+    AddDropdown(SummaryWebhookBox, "SummaryMetrics", "Summary Metrics", PhosphySummaryMetricList, PhosphySummaryMetricDefaultSelected, true)
     task.defer(function()
-        Options.SummaryMetrics:SetValue(SummaryMetricDefaultSelected)
+        Options.SummaryMetrics:SetValue(PhosphySummaryMetricDefaultSelected)
     end)
     AddDivider(SummaryWebhookBox, "Leaderboards")
-    AddDropdown(SummaryWebhookBox, "SummaryLeaderboards", "Leaderboard Places", SummaryLeaderboardList, SummaryLeaderboardDefaultSelected, true)
+    AddDropdown(SummaryWebhookBox, "SummaryLeaderboards", "Leaderboard Places", PhosphySummaryLeaderboardList, PhosphySummaryLeaderboardDefaultSelected, true)
     task.defer(function()
-        Options.SummaryLeaderboards:SetValue(SummaryLeaderboardDefaultSelected)
+        Options.SummaryLeaderboards:SetValue(PhosphySummaryLeaderboardDefaultSelected)
     end)
     AddCheckbox(SummaryWebhookBox, "ToggleSummaryLeaderboards", "Include Leaderboard Places")
     AddDivider(SummaryWebhookBox, "Timer")
@@ -2184,7 +2181,15 @@ end)
 
 local function ApplyFpsCap()
     local val = tonumber(Options.FpsCapValue.Value)
-    if val and val > 0 then
+    if not val or val <= 0 then return end
+
+    local current
+    if getfpscap then
+        local ok, result = pcall(getfpscap)
+        if ok then current = tonumber(result) end
+    end
+
+    if not current or math.abs(current - val) > 0.01 then
         setfpscap(val)
     end
 end
@@ -2193,19 +2198,20 @@ local function RemoveFpsCap()
     setfpscap(0)
 end
 
-local function StartFpsCapLoop()
+function PhosphyStartFpsCapLoop()
     StopTask("FpsCap")
     Tasks.FpsCap = task.spawn(function()
+        ApplyFpsCap()
         while Toggles.ToggleFpsCap.Value do
             ApplyFpsCap()
-            task.wait(1)
+            task.wait(10)
         end
     end)
 end
 
 Toggles.ToggleFpsCap:OnChanged(function(state)
     if state then
-        StartFpsCapLoop()
+        PhosphyStartFpsCapLoop()
     else
         StopTask("FpsCap")
         RemoveFpsCap()
@@ -2321,7 +2327,7 @@ end)
 local autoConfirmTradeConn = nil
 local currentTradePartner = nil
 
-local function GetAutoTradeOfferDelay()
+function PhosphyGetAutoTradeOfferDelay()
     if not (Toggles.ToggleAutoTradeTokens.Value or Toggles.ToggleAutoTradeExclusiveEggs.Value) then
         return 0.75
     end
@@ -2331,7 +2337,8 @@ local function GetAutoTradeOfferDelay()
         seconds = seconds + 0.3
     end
     if Toggles.ToggleAutoTradeExclusiveEggs.Value then
-        for eggName in pairs(ExclusiveEggsModule.ExclusiveEggs or ExclusiveEggsModule) do
+        local exclusiveEggs = require(Modules:WaitForChild("ExclusiveEggs"))
+        for eggName in pairs(exclusiveEggs.ExclusiveEggs or exclusiveEggs) do
             seconds = seconds + ((tonumber(PlayerData.Data[eggName]) or 0) * 0.13)
         end
     end
@@ -2368,7 +2375,7 @@ local function InstallAutoConfirmTrade()
             confirmDebounce = nil
         end
 
-        confirmDebounce = task.delay(GetAutoTradeOfferDelay(), function()
+        confirmDebounce = task.delay(PhosphyGetAutoTradeOfferDelay(), function()
             confirmDebounce = nil
             if not Toggles.ToggleAutoConfirmTrade.Value then return end
             if not currentTradePartner then return end
@@ -2395,7 +2402,7 @@ end)
 
 local autoTradeOfferConn = nil
 
-local function AddAutoTradeOffer(partnerName)
+function PhosphyAddAutoTradeOffer(partnerName)
     if not partnerName then return end
     StopTask("AutoTradeOffer")
 
@@ -2411,7 +2418,8 @@ local function AddAutoTradeOffer(partnerName)
         end
 
         if Toggles.ToggleAutoTradeExclusiveEggs.Value then
-            for eggName in pairs(ExclusiveEggsModule.ExclusiveEggs or ExclusiveEggsModule) do
+            local exclusiveEggs = require(Modules:WaitForChild("ExclusiveEggs"))
+            for eggName in pairs(exclusiveEggs.ExclusiveEggs or exclusiveEggs) do
                 if not Toggles.ToggleAutoTradeExclusiveEggs.Value then break end
 
                 local amount = tonumber(PlayerData.Data[eggName]) or 0
@@ -2425,12 +2433,13 @@ local function AddAutoTradeOffer(partnerName)
     end)
 end
 
-local function HasAutoTradeAssets()
+function PhosphyHasAutoTradeAssets()
     if (tonumber(PlayerData.Data.Tokens) or 0) > 0 then
         return true
     end
 
-    for eggName in pairs(ExclusiveEggsModule.ExclusiveEggs or ExclusiveEggsModule) do
+    local exclusiveEggs = require(Modules:WaitForChild("ExclusiveEggs"))
+    for eggName in pairs(exclusiveEggs.ExclusiveEggs or exclusiveEggs) do
         if (tonumber(PlayerData.Data[eggName]) or 0) > 0 then
             return true
         end
@@ -2439,7 +2448,7 @@ local function HasAutoTradeAssets()
     return false
 end
 
-local function InstallAutoTradeOfferListener()
+function PhosphyInstallAutoTradeOfferListener()
     if autoTradeOfferConn then
         autoTradeOfferConn:Disconnect()
         autoTradeOfferConn = nil
@@ -2448,7 +2457,7 @@ local function InstallAutoTradeOfferListener()
     autoTradeOfferConn = TradeRemote.OnClientEvent:Connect(function(eventType, partnerName)
         if eventType == "CreateTrade" then
             if Toggles.ToggleAutoTradeTokens.Value or Toggles.ToggleAutoTradeExclusiveEggs.Value then
-                AddAutoTradeOffer(partnerName)
+                PhosphyAddAutoTradeOffer(partnerName)
             end
         elseif eventType == "ClearTrade" or eventType == "TradeEnd" then
             StopTask("AutoTradeOffer")
@@ -2456,9 +2465,9 @@ local function InstallAutoTradeOfferListener()
     end)
 end
 
-local function UpdateAutoTradeOfferListener()
+function PhosphyUpdateAutoTradeOfferListener()
     if Toggles.ToggleAutoTradeTokens.Value or Toggles.ToggleAutoTradeExclusiveEggs.Value then
-        InstallAutoTradeOfferListener()
+        PhosphyInstallAutoTradeOfferListener()
     else
         if autoTradeOfferConn then
             autoTradeOfferConn:Disconnect()
@@ -2468,28 +2477,28 @@ local function UpdateAutoTradeOfferListener()
     end
 end
 
-Toggles.ToggleAutoTradeTokens:OnChanged(UpdateAutoTradeOfferListener)
-Toggles.ToggleAutoTradeExclusiveEggs:OnChanged(UpdateAutoTradeOfferListener)
+Toggles.ToggleAutoTradeTokens:OnChanged(PhosphyUpdateAutoTradeOfferListener)
+Toggles.ToggleAutoTradeExclusiveEggs:OnChanged(PhosphyUpdateAutoTradeOfferListener)
 
 local function StartAutoTrade()
     StopTask("AutoTrade")
     Tasks.AutoTrade = task.spawn(function()
         while Toggles.ToggleAutoTrade.Value do
-        local usernames = ParseUsernames(Options.AutoTradeUsernames.Value)
-        if #usernames == 0 then
-            task.wait(3)
-            continue
-        end
-        if Toggles.ToggleAutoTradeOnlyWithAssets.Value and not HasAutoTradeAssets() then
-            task.wait(5)
-            continue
-        end
+            local usernames = ParseUsernames(Options.AutoTradeUsernames.Value)
+            if #usernames == 0 then
+                task.wait(3)
+                continue
+            end
+            if Toggles.ToggleAutoTradeOnlyWithAssets.Value and not PhosphyHasAutoTradeAssets() then
+                task.wait(5)
+                continue
+            end
 
-        for _, name in ipairs(usernames) do
-            if not Toggles.ToggleAutoTrade.Value then break end
-            if Toggles.ToggleAutoTradeOnlyWithAssets.Value and not HasAutoTradeAssets() then break end
+            for _, name in ipairs(usernames) do
+                if not Toggles.ToggleAutoTrade.Value then break end
+                if Toggles.ToggleAutoTradeOnlyWithAssets.Value and not PhosphyHasAutoTradeAssets() then break end
 
-            local target = Players:FindFirstChild(name)
+                local target = Players:FindFirstChild(name)
                 if target and target ~= LocalPlayer then
                     local targetPD = target:FindFirstChild("PlayerData")
                     local inTrade = targetPD and targetPD:FindFirstChild("InTrade") and targetPD.InTrade.Value
@@ -2922,7 +2931,7 @@ local function PostWebhook(url, content, embeds)
     return ok
 end
 
-local function MakeSummarySnapshot()
+function PhosphyMakeSummarySnapshot()
     local itemCounts = {}
     local data = PlayerData.Data or {}
     local function pickNumber(names)
@@ -2952,15 +2961,15 @@ local function MakeSummarySnapshot()
     }
 end
 
-local function DeltaNumber(before, after)
+function PhosphyDeltaNumber(before, after)
     return math.max(0, (after or 0) - (before or 0))
 end
 
-local function NetDeltaNumber(before, after)
+function PhosphyNetDeltaNumber(before, after)
     return (after or 0) - (before or 0)
 end
 
-local function fmtSigned(n)
+function PhosphyFmtSigned(n)
     if n > 0 then
         return "+" .. fmtNum(n)
     elseif n < 0 then
@@ -2969,13 +2978,13 @@ local function fmtSigned(n)
     return "0"
 end
 
-local function GetItemDelta(beforeItems, afterItems)
+function PhosphyGetItemDelta(beforeItems, afterItems)
     local total = 0
     local changed = {}
     local seen = {}
 
     for itemName, afterCount in pairs(afterItems or {}) do
-        local delta = NetDeltaNumber(beforeItems and beforeItems[itemName] or 0, afterCount)
+        local delta = PhosphyNetDeltaNumber(beforeItems and beforeItems[itemName] or 0, afterCount)
         if delta ~= 0 then
             total = total + delta
             table.insert(changed, { Name = itemName, Amount = delta })
@@ -2985,7 +2994,7 @@ local function GetItemDelta(beforeItems, afterItems)
 
     for itemName, beforeCount in pairs(beforeItems or {}) do
         if not seen[itemName] then
-            local delta = NetDeltaNumber(beforeCount, 0)
+            local delta = PhosphyNetDeltaNumber(beforeCount, 0)
             if delta ~= 0 then
                 total = total + delta
                 table.insert(changed, { Name = itemName, Amount = delta })
@@ -3003,30 +3012,30 @@ local function GetItemDelta(beforeItems, afterItems)
     return total, changed
 end
 
-local function IsSummaryMetricEnabled(metricName)
+function PhosphyIsSummaryMetricEnabled(metricName)
     local selected = Options.SummaryMetrics and Options.SummaryMetrics.Value
     return type(selected) == "table" and selected[metricName] == true
 end
 
-local function HasSummaryMetricSelected()
+function PhosphyHasSummaryMetricSelected()
     local selected = Options.SummaryMetrics and Options.SummaryMetrics.Value
     return type(selected) == "table" and next(selected) ~= nil
 end
 
-local function BuildItemsSummary(total, changed)
+function PhosphyBuildItemsSummary(total, changed)
     if total == 0 and #changed == 0 then
         return "```0```"
     end
 
-    local lines = { "Net: " .. fmtSigned(total) }
+    local lines = { "Net: " .. PhosphyFmtSigned(total) }
     for i = 1, math.min(10, #changed) do
-        table.insert(lines, changed[i].Name .. " " .. fmtSigned(changed[i].Amount))
+        table.insert(lines, changed[i].Name .. " " .. PhosphyFmtSigned(changed[i].Amount))
     end
 
     return "```" .. table.concat(lines, "\n") .. "```"
 end
 
-local function MakeSummaryTotals()
+function PhosphyMakeSummaryTotals()
     return {
         Eggs = 0,
         Rebirths = 0,
@@ -3039,22 +3048,22 @@ local function MakeSummaryTotals()
     }
 end
 
-local function AddSummaryDelta(totals, beforeSnapshot, afterSnapshot)
-    totals.Eggs = totals.Eggs + DeltaNumber(beforeSnapshot.Eggs, afterSnapshot.Eggs)
-    totals.Rebirths = totals.Rebirths + DeltaNumber(beforeSnapshot.Rebirths, afterSnapshot.Rebirths)
-    totals.Gems = totals.Gems + DeltaNumber(beforeSnapshot.Gems, afterSnapshot.Gems)
-    totals.Tokens = totals.Tokens + DeltaNumber(beforeSnapshot.Tokens, afterSnapshot.Tokens)
-    totals.Spins = totals.Spins + DeltaNumber(beforeSnapshot.Spins, afterSnapshot.Spins)
-    totals.EvilSpins = totals.EvilSpins + DeltaNumber(beforeSnapshot.EvilSpins, afterSnapshot.EvilSpins)
+function PhosphyAddSummaryDelta(totals, beforeSnapshot, afterSnapshot)
+    totals.Eggs = totals.Eggs + PhosphyDeltaNumber(beforeSnapshot.Eggs, afterSnapshot.Eggs)
+    totals.Rebirths = totals.Rebirths + PhosphyDeltaNumber(beforeSnapshot.Rebirths, afterSnapshot.Rebirths)
+    totals.Gems = totals.Gems + PhosphyDeltaNumber(beforeSnapshot.Gems, afterSnapshot.Gems)
+    totals.Tokens = totals.Tokens + PhosphyDeltaNumber(beforeSnapshot.Tokens, afterSnapshot.Tokens)
+    totals.Spins = totals.Spins + PhosphyDeltaNumber(beforeSnapshot.Spins, afterSnapshot.Spins)
+    totals.EvilSpins = totals.EvilSpins + PhosphyDeltaNumber(beforeSnapshot.EvilSpins, afterSnapshot.EvilSpins)
 
-    local itemTotal, itemBreakdown = GetItemDelta(beforeSnapshot.Items, afterSnapshot.Items)
+    local itemTotal, itemBreakdown = PhosphyGetItemDelta(beforeSnapshot.Items, afterSnapshot.Items)
     totals.Items = totals.Items + itemTotal
     for _, entry in ipairs(itemBreakdown) do
         totals.ItemBreakdown[entry.Name] = (totals.ItemBreakdown[entry.Name] or 0) + entry.Amount
     end
 end
 
-local function GetSortedItemBreakdown(itemBreakdown)
+function PhosphyGetSortedItemBreakdown(itemBreakdown)
     local changed = {}
     for itemName, amount in pairs(itemBreakdown or {}) do
         if amount ~= 0 then
@@ -3072,7 +3081,7 @@ local function GetSortedItemBreakdown(itemBreakdown)
     return changed
 end
 
-local SummaryMetricIcons = {
+PhosphySummaryMetricIcons = {
     ["Eggs Hatched"] = "🥚 Eggs Hatched",
     ["Rebirths Gained"] = "🔁 Rebirths Gained",
     ["Gems Gained"] = "💎 Gems Gained",
@@ -3094,11 +3103,11 @@ local SummaryMetricIcons = {
     ["Robux Place"] = "Robux Place",
 }
 
-local function normalizeStatName(name)
+function PhosphyNormalizeStatName(name)
     return tostring(name):lower():gsub("[^%w]", "")
 end
 
-local function ReadLeaderstatValue(names)
+function PhosphyReadLeaderstatValue(names)
     local leaderstats = LocalPlayer:FindFirstChild("leaderstats")
     if not leaderstats then return nil end
 
@@ -3111,11 +3120,11 @@ local function ReadLeaderstatValue(names)
 
     local wanted = {}
     for _, name in ipairs(names) do
-        wanted[normalizeStatName(name)] = true
+        wanted[PhosphyNormalizeStatName(name)] = true
     end
 
     for _, stat in ipairs(leaderstats:GetChildren()) do
-        if wanted[normalizeStatName(stat.Name)] and stat.Value ~= nil then
+        if wanted[PhosphyNormalizeStatName(stat.Name)] and stat.Value ~= nil then
             return stat.Value
         end
     end
@@ -3123,7 +3132,7 @@ local function ReadLeaderstatValue(names)
     return nil
 end
 
-local function FormatStatValue(value)
+function PhosphyFormatStatValue(value)
     local numeric = parseCompactNumber(value)
     if numeric then
         return fmtNum(numeric)
@@ -3140,29 +3149,29 @@ local function FormatStatValue(value)
     return nil
 end
 
-local function GetDisplayStat(primaryNames, fallbackNames)
+function PhosphyGetDisplayStat(primaryNames, fallbackNames)
     local data = PlayerData.Data or {}
 
     for _, name in ipairs(primaryNames) do
-        local formatted = FormatStatValue(data[name])
+        local formatted = PhosphyFormatStatValue(data[name])
         if formatted then return formatted end
     end
 
-    local leaderValue = ReadLeaderstatValue(primaryNames)
-        or ReadLeaderstatValue(fallbackNames or {})
+    local leaderValue = PhosphyReadLeaderstatValue(primaryNames)
+        or PhosphyReadLeaderstatValue(fallbackNames or {})
     if leaderValue ~= nil then
-        return FormatStatValue(leaderValue) or tostring(leaderValue)
+        return PhosphyFormatStatValue(leaderValue) or tostring(leaderValue)
     end
 
     for _, name in ipairs(fallbackNames or {}) do
-        local formatted = FormatStatValue(data[name])
+        local formatted = PhosphyFormatStatValue(data[name])
         if formatted then return formatted end
     end
 
     return "0"
 end
 
-local SummaryLeaderboardAliases = {
+PhosphySummaryLeaderboardAliases = {
     ["Total Gems"] = { "TotalGems", "Gems", "Gem" },
     ["Total Eggs"] = { "TotalEggs", "Eggs", "EggsHatched", "TotalEggsHatched" },
     ["Total Clicks"] = { "TotalClicks", "Clicks", "Click" },
@@ -3171,25 +3180,25 @@ local SummaryLeaderboardAliases = {
     ["Robux"] = { "Robux", "RobuxSpent", "TotalRobux" },
 }
 
-local function FormatLeaderboardPlace(value)
+function PhosphyFormatLeaderboardPlace(value)
     if value == nil then return "N/A" end
     local numeric = parseCompactNumber(value)
     if numeric then return "#" .. fmtNum(numeric) end
     return tostring(value)
 end
 
-local function ReadLeaderboardPlace(label)
+function PhosphyReadLeaderboardPlace(label)
     local data = PlayerData.Data or {}
-    local aliases = SummaryLeaderboardAliases[label] or { label }
+    local aliases = PhosphySummaryLeaderboardAliases[label] or { label }
     local exactKeys = {}
     local aliasKeys = {}
     local placeKeys = { "Place", "Rank", "Position", "LeaderboardPlace", "LeaderboardRank" }
 
     for _, alias in ipairs(aliases) do
-        aliasKeys[normalizeStatName(alias)] = true
+        aliasKeys[PhosphyNormalizeStatName(alias)] = true
         for _, suffix in ipairs(placeKeys) do
-            exactKeys[normalizeStatName(alias .. suffix)] = true
-            exactKeys[normalizeStatName(suffix .. alias)] = true
+            exactKeys[PhosphyNormalizeStatName(alias .. suffix)] = true
+            exactKeys[PhosphyNormalizeStatName(suffix .. alias)] = true
         end
     end
 
@@ -3207,7 +3216,7 @@ local function ReadLeaderboardPlace(label)
         if type(tbl) ~= "table" or depth > 3 then return nil end
 
         for key, value in pairs(tbl) do
-            local normalized = normalizeStatName(key)
+            local normalized = PhosphyNormalizeStatName(key)
             if exactKeys[normalized] and (type(value) == "number" or type(value) == "string") then
                 return value
             end
@@ -3220,7 +3229,7 @@ local function ReadLeaderboardPlace(label)
 
         for key, value in pairs(tbl) do
             if type(value) == "table" then
-                local normalized = normalizeStatName(key)
+                local normalized = PhosphyNormalizeStatName(key)
                 if normalized:find("leaderboard", 1, true)
                     or normalized:find("rank", 1, true)
                     or normalized:find("place", 1, true)
@@ -3235,26 +3244,26 @@ local function ReadLeaderboardPlace(label)
         return nil
     end
 
-    return FormatLeaderboardPlace(scan(data, 0))
+    return PhosphyFormatLeaderboardPlace(scan(data, 0))
 end
 
-local function AddSummaryLeaderboardMetrics(entries)
+function PhosphyAddSummaryLeaderboardMetrics(entries)
     if not (Toggles.ToggleSummaryLeaderboards and Toggles.ToggleSummaryLeaderboards.Value) then return end
 
     local selected = Options.SummaryLeaderboards and Options.SummaryLeaderboards.Value
     if type(selected) ~= "table" then return end
 
-    for _, leaderboardName in ipairs(SummaryLeaderboardList) do
+    for _, leaderboardName in ipairs(PhosphySummaryLeaderboardList) do
         if selected[leaderboardName] then
             table.insert(entries, {
                 Name = leaderboardName .. " Place",
-                Value = ReadLeaderboardPlace(leaderboardName),
+                Value = PhosphyReadLeaderboardPlace(leaderboardName),
             })
         end
     end
 end
 
-local function GetTotalTimePlayed()
+function PhosphyGetTotalTimePlayed()
     local data = PlayerData.Data or {}
     local candidates = {
         data.TimePlayed,
@@ -3277,7 +3286,7 @@ local function GetTotalTimePlayed()
     return 0
 end
 
-local function fmtDuration(seconds)
+function PhosphyFmtDuration(seconds)
     if type(seconds) == "string" and seconds ~= "" then
         local compact = parseCompactNumber(seconds)
         if compact then
@@ -3303,8 +3312,8 @@ local function fmtDuration(seconds)
     return string.format("%dm", minutes)
 end
 
-local function AddSummaryMetric(entries, metricName, value)
-    if IsSummaryMetricEnabled(metricName) then
+function PhosphyAddSummaryMetric(entries, metricName, value)
+    if PhosphyIsSummaryMetricEnabled(metricName) then
         table.insert(entries, {
             Name = metricName,
             Value = value,
@@ -3312,8 +3321,8 @@ local function AddSummaryMetric(entries, metricName, value)
     end
 end
 
-local function AddSummaryField(fields, entry)
-    local label = SummaryMetricIcons[entry.Name] or entry.Name
+function PhosphyAddSummaryField(fields, entry)
+    local label = PhosphySummaryMetricIcons[entry.Name] or entry.Name
     table.insert(fields, {
         name = label,
         value = tostring(entry.Value),
@@ -3321,61 +3330,61 @@ local function AddSummaryField(fields, entry)
     })
 end
 
-local function BuildSummaryMetricEntries(totals, itemBreakdown)
+function PhosphyBuildSummaryMetricEntries(totals, itemBreakdown)
     local entries = {}
-    AddSummaryMetric(entries, "Eggs Hatched", fmtNum(totals.Eggs))
-    AddSummaryMetric(entries, "Rebirths Gained", fmtNum(totals.Rebirths))
-    AddSummaryMetric(entries, "Gems Gained", fmtNum(totals.Gems))
-    AddSummaryMetric(entries, "Tokens Gained", fmtNum(totals.Tokens))
-    AddSummaryMetric(entries, "Spins Gained", fmtNum(totals.Spins))
-    AddSummaryMetric(entries, "Evil Spins Gained", fmtNum(totals.EvilSpins))
-    AddSummaryMetric(entries, "Items Net Change", BuildItemsSummary(totals.Items, itemBreakdown))
-    AddSummaryMetric(entries, "Total Clicks", GetDisplayStat({
+    PhosphyAddSummaryMetric(entries, "Eggs Hatched", fmtNum(totals.Eggs))
+    PhosphyAddSummaryMetric(entries, "Rebirths Gained", fmtNum(totals.Rebirths))
+    PhosphyAddSummaryMetric(entries, "Gems Gained", fmtNum(totals.Gems))
+    PhosphyAddSummaryMetric(entries, "Tokens Gained", fmtNum(totals.Tokens))
+    PhosphyAddSummaryMetric(entries, "Spins Gained", fmtNum(totals.Spins))
+    PhosphyAddSummaryMetric(entries, "Evil Spins Gained", fmtNum(totals.EvilSpins))
+    PhosphyAddSummaryMetric(entries, "Items Net Change", PhosphyBuildItemsSummary(totals.Items, itemBreakdown))
+    PhosphyAddSummaryMetric(entries, "Total Clicks", PhosphyGetDisplayStat({
         "TotalClicks",
         "ClicksTotal",
         "TotalClick",
         "ClickTotal",
     }, { "Clicks" }))
-    AddSummaryMetric(entries, "Total Rebirths", GetDisplayStat({
+    PhosphyAddSummaryMetric(entries, "Total Rebirths", PhosphyGetDisplayStat({
         "TotalRebirths",
         "RebirthsTotal",
         "TotalRebirth",
         "RebirthTotal",
     }, { "Rebirths" }))
-    AddSummaryMetric(entries, "Total Gems", GetDisplayStat({
+    PhosphyAddSummaryMetric(entries, "Total Gems", PhosphyGetDisplayStat({
         "TotalGems",
         "GemsTotal",
         "TotalGem",
         "GemTotal",
     }, { "Gems" }))
-    AddSummaryMetric(entries, "Total Tokens", GetDisplayStat({
+    PhosphyAddSummaryMetric(entries, "Total Tokens", PhosphyGetDisplayStat({
         "TotalTokens",
         "TokensTotal",
         "TotalToken",
         "TokenTotal",
     }, { "Tokens" }))
-    AddSummaryMetric(entries, "Total Eggs Hatched", GetDisplayStat({
+    PhosphyAddSummaryMetric(entries, "Total Eggs Hatched", PhosphyGetDisplayStat({
         "TotalEggsHatched",
         "EggsHatchedTotal",
         "TotalEggs",
         "EggsTotal",
         "EggsHatched",
     }, { "Eggs" }))
-    AddSummaryMetric(entries, "Total Time Played", fmtDuration(GetTotalTimePlayed()))
-    AddSummaryLeaderboardMetrics(entries)
+    PhosphyAddSummaryMetric(entries, "Total Time Played", PhosphyFmtDuration(PhosphyGetTotalTimePlayed()))
+    PhosphyAddSummaryLeaderboardMetrics(entries)
     return entries
 end
 
-local function BuildSummaryEmbeds(minutes, totals, isTest)
-    local itemBreakdown = GetSortedItemBreakdown(totals.ItemBreakdown)
-    local entries = BuildSummaryMetricEntries(totals, itemBreakdown)
+function PhosphyBuildSummaryEmbeds(minutes, totals, isTest)
+    local itemBreakdown = PhosphyGetSortedItemBreakdown(totals.ItemBreakdown)
+    local entries = PhosphyBuildSummaryMetricEntries(totals, itemBreakdown)
     local fields = {
         { name = "Window", value = isTest and "Test" or tostring(minutes) .. " minute(s)", inline = true },
         { name = "Player", value = LocalPlayer.Name, inline = true },
     }
 
     for _, entry in ipairs(entries) do
-        AddSummaryField(fields, entry)
+        PhosphyAddSummaryField(fields, entry)
         if #fields >= 25 then break end
     end
 
@@ -3422,17 +3431,17 @@ SendSummaryWebhookTest = function()
         Library:Notify("Summary Webhook: Enter a URL first!")
         return
     end
-    if not HasSummaryMetricSelected() then
+    if not PhosphyHasSummaryMetricSelected() then
         Library:Notify("Summary Webhook: Select at least one metric!")
         return
     end
 
-    local totals = MakeSummaryTotals()
-    local ok = PostWebhook(url, "", BuildSummaryEmbeds(tonumber(Options.WebhookSummaryMinutes.Value) or 10, totals, true))
+    local totals = PhosphyMakeSummaryTotals()
+    local ok = PostWebhook(url, "", PhosphyBuildSummaryEmbeds(tonumber(Options.WebhookSummaryMinutes.Value) or 10, totals, true))
     Library:Notify(ok and "Summary webhook test sent!" or "Summary webhook test failed.")
 end
 
-local function StartWebhookSummary()
+function PhosphyStartWebhookSummary()
     StopTask("WebhookSummary")
 
     local url = Options.WebhookSummaryURL.Value
@@ -3441,32 +3450,32 @@ local function StartWebhookSummary()
         Toggles.ToggleWebhookSummary:SetValue(false)
         return
     end
-    if not HasSummaryMetricSelected() then
+    if not PhosphyHasSummaryMetricSelected() then
         Library:Notify("Summary Webhook: Select at least one metric!")
         Toggles.ToggleWebhookSummary:SetValue(false)
         return
     end
 
     Tasks.WebhookSummary = task.spawn(function()
-        local lastSnapshot = MakeSummarySnapshot()
+        local lastSnapshot = PhosphyMakeSummarySnapshot()
 
         while Toggles.ToggleWebhookSummary.Value do
             local minutes = math.clamp(tonumber(Options.WebhookSummaryMinutes.Value) or 10, 1, 60)
             local waited = 0
             local seconds = minutes * 60
-            local totals = MakeSummaryTotals()
+            local totals = PhosphyMakeSummaryTotals()
 
             while Toggles.ToggleWebhookSummary.Value and waited < seconds do
                 task.wait(1)
-                local currentSnapshot = MakeSummarySnapshot()
-                AddSummaryDelta(totals, lastSnapshot, currentSnapshot)
+                local currentSnapshot = PhosphyMakeSummarySnapshot()
+                PhosphyAddSummaryDelta(totals, lastSnapshot, currentSnapshot)
                 lastSnapshot = currentSnapshot
                 waited = waited + 1
             end
 
             if not Toggles.ToggleWebhookSummary.Value then break end
 
-            if not HasSummaryMetricSelected() then
+            if not PhosphyHasSummaryMetricSelected() then
                 Library:Notify("Summary Webhook: Select at least one metric!")
                 Toggles.ToggleWebhookSummary:SetValue(false)
                 break
@@ -3474,7 +3483,7 @@ local function StartWebhookSummary()
 
             local currentUrl = Options.WebhookSummaryURL.Value
             if currentUrl and currentUrl ~= "" then
-                PostWebhook(currentUrl, "", BuildSummaryEmbeds(minutes, totals, false))
+                PostWebhook(currentUrl, "", PhosphyBuildSummaryEmbeds(minutes, totals, false))
             else
                 Library:Notify("Summary Webhook: URL is empty. Stopping.")
                 Toggles.ToggleWebhookSummary:SetValue(false)
@@ -3562,7 +3571,7 @@ Toggles.ToggleWebhookSummary:OnChanged(function(state)
             while Toggles.ToggleWebhookSummary.Value
                 and (not Options.WebhookSummaryURL.Value
                     or Options.WebhookSummaryURL.Value == ""
-                    or not HasSummaryMetricSelected())
+                    or not PhosphyHasSummaryMetricSelected())
                 and waited < 3
             do
                 task.wait(0.1)
@@ -3570,7 +3579,7 @@ Toggles.ToggleWebhookSummary:OnChanged(function(state)
             end
 
             if Toggles.ToggleWebhookSummary.Value then
-                StartWebhookSummary()
+                PhosphyStartWebhookSummary()
             end
         end)
     else
@@ -3582,7 +3591,7 @@ Options.WebhookSummaryMinutes:OnChanged(function()
     if Toggles.ToggleWebhookSummary.Value then
         task.delay(0.75, function()
             if Toggles.ToggleWebhookSummary.Value then
-                StartWebhookSummary()
+                PhosphyStartWebhookSummary()
             end
         end)
     end
