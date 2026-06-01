@@ -101,6 +101,11 @@ wss.on("connection", (socket, request) => {
         const sentTo = sendAccountCommand(message.targets || "all", `phosphy:set ${payload}`);
         pushLog({ source: "admin", content: `Set ${message.payload?.kind || "control"} ${message.payload?.id || ""} on ${sentTo.join(", ") || "nobody"}` });
       }
+
+      if (message.type === "clearLogs") {
+        logs.length = 0;
+        broadcast({ type: "logs", logs });
+      }
     });
     return;
   }

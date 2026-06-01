@@ -48,7 +48,7 @@ repeat task.wait(0.1) until getgenv().Nexus
 local function safeLog(message)
     if Nexus and Nexus.IsConnected then
         pcall(function()
-            Nexus:Log(tostring(message))
+            Nexus.Log(Nexus, tostring(message))
         end)
     end
 end
@@ -108,17 +108,18 @@ local function collectState()
 
     if Nexus and Nexus.IsConnected then
         pcall(function()
-            Nexus:Send("PhosphyState", {
-                Content = HttpService:JSONEncode({
-                    Toggles = toggles,
-                    Options = options,
-                })
+            local encoded = HttpService.JSONEncode(HttpService, {
+                Toggles = toggles,
+                Options = options,
             })
-        })
+            Nexus.Send(Nexus, "PhosphyState", {
+                Content = encoded
+            })
+        end)
     end
 end
 
-Nexus:AddCommand("phosphy:set", function(message)
+Nexus.AddCommand(Nexus, "phosphy:set", function(message)
     local ok, payload = pcall(HttpService.JSONDecode, HttpService, message)
     if not ok or type(payload) ~= "table" then
         safeLog("Bad phosphy:set payload")
@@ -138,7 +139,7 @@ Nexus:AddCommand("phosphy:set", function(message)
     if kind == "toggle" then
         local toggle = bridge.Toggles[id]
         if toggle then
-            toggle:SetValue(value == true)
+            toggle.SetValue(toggle, value == true)
             safeLog("Toggle " .. tostring(id) .. " = " .. tostring(value == true))
             task.delay(0.25, collectState)
         else
@@ -150,7 +151,7 @@ Nexus:AddCommand("phosphy:set", function(message)
     if kind == "option" then
         local option = bridge.Options[id]
         if option then
-            option:SetValue(value)
+            option.SetValue(option, value)
             safeLog("Option " .. tostring(id) .. " = " .. tostring(value))
             task.delay(0.25, collectState)
         else
@@ -161,7 +162,7 @@ Nexus:AddCommand("phosphy:set", function(message)
 
     if kind == "button" then
         if id == "unload" and bridge.Library then
-            bridge.Library:Unload()
+            bridge.Library.Unload(bridge.Library)
             safeLog("Phosphy unloaded")
         end
         return
@@ -171,7 +172,7 @@ Nexus:AddCommand("phosphy:set", function(message)
 end)
 
 task.spawn(function()
-    Nexus:Connect(RELAY_HOST, true)
+    Nexus.Connect(Nexus, RELAY_HOST, true)
 end)
 
 task.spawn(function()

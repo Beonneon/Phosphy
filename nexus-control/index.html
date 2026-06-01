@@ -583,7 +583,7 @@
         q("log").textContent = "Connect to your server to see output";
         return;
       }
-      q("log").innerHTML = state.logs.slice(-120).reverse().map(line => {
+        q("log").innerHTML = state.logs.slice(-120).map(line => {
         const t = new Date(line.time).toLocaleTimeString();
         return `<div class="log-line"><span style="color:#999690">${t}</span> <b>${escapeHtml(line.source)}</b> ${escapeHtml(line.content)}</div>`;
       }).join("");
@@ -650,6 +650,10 @@
           renderAccounts();
         }
         if (msg.type === "log") addLog(msg.log.source, msg.log.content, msg.log.time);
+        if (msg.type === "logs") {
+          state.logs = msg.logs || [];
+          renderLogs();
+        }
       };
     }
     function parseValue(raw) {
@@ -695,7 +699,11 @@
     q("sendRawBtn").onclick = () => send({ type: "command", targets: "all", command: q("rawCommand").value });
     q("runTargetBtn").onclick = () => send({ type: "script", targets: targets(), script: q("scriptBox").value });
     q("runAllBtn").onclick = () => send({ type: "script", targets: "all", script: q("scriptBox").value });
-    q("clearLogBtn").onclick = () => { state.logs = []; renderLogs(); };
+    q("clearLogBtn").onclick = () => {
+      if (state.ws?.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify({ type: "clearLogs" }));
+      state.logs = [];
+      renderLogs();
+    };
 
     q("relayUrl").value = localStorage.getItem("nexusRelayUrl") || "ws://localhost:8787/admin";
     q("adminKey").value = localStorage.getItem("nexusAdminKey") || "change-me";
