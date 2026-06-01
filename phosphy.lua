@@ -259,18 +259,11 @@ local RarityList = { "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic"
 local GameSettingsList = {
     "BetterQuality",
     "Music",
-    "Sound",
     "Sounds",
-    "SFX",
     "HideOtherPets",
     "HideAuras",
     "HideAura",
-    "HidePopups",
     "HidePopUps",
-    "HidePopup",
-    "HidePopUp",
-    "DisablePopups",
-    "DisablePopUps",
 }
 PhosphySummaryMetricList = {
     "Eggs Hatched",
@@ -2316,19 +2309,34 @@ function PhosphyHasAutoTradeOfferEnabled()
     return Toggles.ToggleAutoTradeTokens.Value or Toggles.ToggleAutoTradeExclusiveEggs.Value
 end
 
+function PhosphyGetPlayerItemAmount(itemName)
+    local data = PlayerData.Data or {}
+    local direct = tonumber(data[itemName]) or 0
+    local itemCount = data.Items and tonumber(data.Items[itemName]) or 0
+    return math.max(direct, itemCount)
+end
+
+function PhosphyGetTradeTokenAmount()
+    return PhosphyGetPlayerItemAmount("Tokens")
+end
+
+function PhosphyGetExclusiveEggAmount(eggName)
+    return PhosphyGetPlayerItemAmount(eggName)
+end
+
 function PhosphyGetAutoTradeOfferDelay()
     if not PhosphyHasAutoTradeOfferEnabled() then
         return 0.75
     end
 
     local seconds = 1
-    if Toggles.ToggleAutoTradeTokens.Value and (tonumber(PlayerData.Data.Tokens) or 0) > 0 then
-        seconds = seconds + ((tonumber(PlayerData.Data.Tokens) or 0) * 0.12)
+    if Toggles.ToggleAutoTradeTokens.Value and PhosphyGetTradeTokenAmount() > 0 then
+        seconds = seconds + (PhosphyGetTradeTokenAmount() * 0.12)
     end
     if Toggles.ToggleAutoTradeExclusiveEggs.Value then
         local exclusiveEggs = require(Modules:WaitForChild("ExclusiveEggs"))
         for eggName in pairs(exclusiveEggs.ExclusiveEggs or exclusiveEggs) do
-            seconds = seconds + ((tonumber(PlayerData.Data[eggName]) or 0) * 0.13)
+            seconds = seconds + (PhosphyGetExclusiveEggAmount(eggName) * 0.13)
         end
     end
 
@@ -2420,7 +2428,7 @@ function PhosphyAddAutoTradeOffer(partnerName)
         task.wait(0.75)
 
         if Toggles.ToggleAutoTradeTokens.Value then
-            local tokens = tonumber(PlayerData.Data.Tokens) or 0
+            local tokens = PhosphyGetTradeTokenAmount()
             if tokens > 0 then
                 TradeRemote:FireServer({ "AddTokens", tokens, partnerName })
                 task.wait(0.2)
@@ -2432,7 +2440,7 @@ function PhosphyAddAutoTradeOffer(partnerName)
             for eggName in pairs(exclusiveEggs.ExclusiveEggs or exclusiveEggs) do
                 if not Toggles.ToggleAutoTradeExclusiveEggs.Value then break end
 
-                local amount = tonumber(PlayerData.Data[eggName]) or 0
+                local amount = PhosphyGetExclusiveEggAmount(eggName)
                 for _ = 1, amount do
                     if not Toggles.ToggleAutoTradeExclusiveEggs.Value then break end
                     TradeRemote:FireServer({ "AddEgg", eggName, partnerName, "Add" })
@@ -2450,13 +2458,13 @@ function PhosphyAddAutoTradeOffer(partnerName)
 end
 
 function PhosphyHasAutoTradeAssets()
-    if (tonumber(PlayerData.Data.Tokens) or 0) > 0 then
+    if PhosphyGetTradeTokenAmount() > 0 then
         return true
     end
 
     local exclusiveEggs = require(Modules:WaitForChild("ExclusiveEggs"))
     for eggName in pairs(exclusiveEggs.ExclusiveEggs or exclusiveEggs) do
-        if (tonumber(PlayerData.Data[eggName]) or 0) > 0 then
+        if PhosphyGetExclusiveEggAmount(eggName) > 0 then
             return true
         end
     end
