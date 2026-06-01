@@ -142,9 +142,34 @@ local function collectState()
     end
 
     local options = {}
+    local optionMeta = {}
+    local function readValues(list)
+        if type(list) ~= "table" then return nil end
+
+        local values = {}
+        for _, value in ipairs(list) do
+            table.insert(values, tostring(value))
+        end
+
+        if #values == 0 then
+            for key in pairs(list) do
+                if type(key) == "string" then
+                    table.insert(values, key)
+                end
+            end
+            table.sort(values)
+        end
+
+        return values
+    end
+
     for id, option in pairs(bridge.Options) do
         if type(id) == "string" and option and option.Value ~= nil then
             options[id] = option.Value
+            optionMeta[id] = {
+                Values = readValues(option.Values),
+                Multi = option.Multi == true or type(option.Value) == "table",
+            }
         end
     end
 
@@ -152,8 +177,152 @@ local function collectState()
         Content = HttpService:JSONEncode({
             Toggles = toggles,
             Options = options,
+            OptionMeta = optionMeta,
         }),
     })
+end
+
+local function redeemAllCodes()
+    local modules = game:GetService("ReplicatedStorage"):WaitForChild("Game"):WaitForChild("Modules")
+    local events = game:GetService("ReplicatedStorage"):WaitForChild("Game"):WaitForChild("Events")
+    local playerDataModule = LocalPlayer.PlayerScripts:FindFirstChild("PlayerData", true)
+    if not playerDataModule then
+        safeLog("Redeem codes failed: PlayerData missing")
+        return
+    end
+
+    local codesModule = require(modules:WaitForChild("Codes"))
+    local playerData = require(playerDataModule)
+    local codesRemote = events:WaitForChild("Codes")
+    local codes = codesModule.Codes or codesModule
+    local claimed = playerData.Data.RedeemedCodes or {}
+    local count = 0
+
+    for code in pairs(codes) do
+        if not table.find(claimed, code) then
+            codesRemote:FireServer(code)
+            count += 1
+            task.wait(0.25)
+        end
+    end
+
+    safeLog("Attempted " .. tostring(count) .. " code(s)")
+end
+
+local function startAutoProgression()
+    local replicatedStorage = game:GetService("ReplicatedStorage")
+    local modules = replicatedStorage:WaitForChild("Game"):WaitForChild("Modules")
+    local events = replicatedStorage:WaitForChild("Game"):WaitForChild("Events")
+    local playerDataModule = LocalPlayer.PlayerScripts:FindFirstChild("PlayerData", true)
+    if not playerDataModule then
+        safeLog("Auto Progression failed: PlayerData missing")
+        return
+    end
+
+    local playerData = require(playerDataModule)
+    local clickRemote = events:WaitForChild("Click")
+    local eggRemote = events:WaitForChild("Egg")
+    local petActionRemote = events:WaitForChild("PetAction")
+    local rebirthRemote = events:WaitForChild("Rebirth")
+    local additionalRemote = events:WaitForChild("Additional")
+    local switchRemote = events:WaitForChild("Switch")
+
+    local function teleportToEgg(eggName)
+        local eggs = workspace:FindFirstChild("Game") and workspace.Game:FindFirstChild("Eggs")
+        local egg = eggs and eggs:FindFirstChild(eggName)
+        local character = LocalPlayer.Character
+        local hrp = character and character:FindFirstChild("HumanoidRootPart")
+        if egg and hrp then
+            hrp.CFrame = egg:GetPivot() + Vector3.new(0, 5, 0)
+        end
+    end
+
+    task.spawn(function()
+        safeLog("Auto Progression started")
+
+        if (playerData.Data.TutorialStage or 0) <= 1 then
+            for _ = 1, 80 do
+                clickRemote:FireServer()
+                task.wait(0.1)
+            end
+            local waited = 0
+            repeat
+                task.wait(0.2)
+                waited += 0.2
+            until (playerData.Data.TutorialStage or 0) >= 2 or waited >= 8
+        end
+
+        if (playerData.Data.TutorialStage or 0) <= 2 then
+            teleportToEgg("Starter")
+            task.wait(0.5)
+            eggRemote:FireServer("Starter", "E")
+            task.wait(1)
+            petActionRemote:FireServer("Equip Best")
+            local waited = 0
+            repeat
+                task.wait(0.2)
+                waited += 0.2
+            until (playerData.Data.TutorialStage or 0) >= 3 or waited >= 8
+        end
+
+        if (playerData.Data.TutorialStage or 0) <= 3 then
+            petActionRemote:FireServer("Equip Best")
+            task.wait(0.5)
+            local waited = 0
+            repeat
+                task.wait(0.2)
+                waited += 0.2
+            until (playerData.Data.TutorialStage or 0) >= 4 or waited >= 8
+        end
+
+        if (playerData.Data.TutorialStage or 0) <= 4 then
+            for _ = 1, 120 do
+                clickRemote:FireServer()
+                task.wait(0.05)
+            end
+            rebirthRemote:FireServer(1)
+            local waited = 0
+            repeat
+                task.wait(0.2)
+                waited += 0.2
+            until (playerData.Data.TutorialStage or 0) >= 5 or waited >= 8
+        end
+
+        if (playerData.Data.TutorialStage or 0) <= 5 then
+            additionalRemote:FireServer("TutorialEnd")
+            task.wait(1)
+        end
+
+        local bridge = waitForBridge()
+        if bridge and bridge.Toggles.ToggleAH and bridge.Toggles.ToggleAH.Value then
+            local eggName = bridge.Options.EggSelect and bridge.Options.EggSelect.Value
+            if eggName then
+                switchRemote:FireServer("AutoHatching", true)
+                teleportToEgg(eggName)
+            end
+        end
+
+        safeLog("Auto Progression finished at stage " .. tostring(playerData.Data.TutorialStage or 0))
+    end)
+end
+
+local function handleButton(id)
+    if id == "RedeemAllCodes" then
+        redeemAllCodes()
+    elseif id == "StartAutoProgression" then
+        startAutoProgression()
+    elseif id == "RefreshState" then
+        collectState()
+        safeLog("State refreshed")
+    elseif id == "unload" then
+        local bridge = waitForBridge()
+        if bridge and bridge.Library then
+            bridge.Library.Unload(bridge.Library)
+            safeLog("Phosphy unloaded")
+        end
+    else
+        safeLog("Unknown button: " .. tostring(id))
+    end
 end
 
 local function applyPhosphyPayload(message)
@@ -194,9 +363,8 @@ local function applyPhosphyPayload(message)
         return
     end
 
-    if payload.kind == "button" and id == "unload" and bridge.Library then
-        bridge.Library.Unload(bridge.Library)
-        safeLog("Phosphy unloaded")
+    if payload.kind == "button" then
+        handleButton(id)
     end
 end
 
