@@ -12,19 +12,45 @@ repeat task.wait() until game:IsLoaded()
 
 local HttpService = game:GetService("HttpService")
 
-if not getgenv().Nexus then
-    local ok, source = pcall(game.HttpGet, game, NEXUS_URL)
-    if ok and source then
-        source = source:gsub("if not Nexus_Version then%s*Nexus:Connect%(%s*%)%s*end", "")
-        loadstring(source, "Nexus")()
+if getgenv().PhosphyNexusRemoteRunning then
+    return
+end
+getgenv().PhosphyNexusRemoteRunning = true
+
+local oldNexus = getgenv().Nexus
+if oldNexus then
+    pcall(function()
+        oldNexus.Terminated = true
+        oldNexus.IsConnected = false
+        if oldNexus.Socket then
+            oldNexus.Socket:Close()
+        end
+        for _, conn in pairs(oldNexus.Connections or {}) do
+            pcall(function()
+                conn:Disconnect()
+            end)
+        end
+    end)
+    getgenv().Nexus = nil
+end
+
+local okNexus, nexusSource = pcall(game.HttpGet, game, NEXUS_URL)
+if okNexus and nexusSource then
+    nexusSource = nexusSource:gsub("if%s+not%s+Nexus_Version%s+then%s*Nexus:Connect%(%s*%)%s*end", "")
+    local nexusFn = loadstring(nexusSource, "Nexus")
+    if nexusFn then
+        nexusFn()
     end
 end
 
 repeat task.wait(0.1) until getgenv().Nexus
 
-Nexus:Connect(RELAY_HOST, true)
-if not Nexus.IsConnected then
-    Nexus.Connected:Wait()
+local function safeLog(message)
+    if Nexus and Nexus.IsConnected then
+        pcall(function()
+            Nexus:Log(tostring(message))
+        end)
+    end
 end
 
 local function exposePhosphy(source)
@@ -42,12 +68,12 @@ if not getgenv().PhosphyRemote then
         local fn, err = loadstring(exposePhosphy(source), "Phosphy")
         if fn then
             task.spawn(fn)
-            Nexus:Log("Phosphy loaded with remote control bridge")
+            safeLog("Phosphy loaded with remote control bridge")
         else
-            Nexus:Log("Phosphy load failed: " .. tostring(err))
+            safeLog("Phosphy load failed: " .. tostring(err))
         end
     else
-        Nexus:Log("Failed to download Phosphy")
+        safeLog("Failed to download Phosphy")
     end
 end
 
@@ -80,24 +106,28 @@ local function collectState()
         end
     end
 
-    Nexus:Send("PhosphyState", {
-        Content = HttpService:JSONEncode({
-            Toggles = toggles,
-            Options = options,
+    if Nexus and Nexus.IsConnected then
+        pcall(function()
+            Nexus:Send("PhosphyState", {
+                Content = HttpService:JSONEncode({
+                    Toggles = toggles,
+                    Options = options,
+                })
+            })
         })
-    })
+    end
 end
 
 Nexus:AddCommand("phosphy:set", function(message)
     local ok, payload = pcall(HttpService.JSONDecode, HttpService, message)
     if not ok or type(payload) ~= "table" then
-        Nexus:Log("Bad phosphy:set payload")
+        safeLog("Bad phosphy:set payload")
         return
     end
 
     local bridge = waitForBridge()
     if not bridge then
-        Nexus:Log("Phosphy bridge is not ready")
+        safeLog("Phosphy bridge is not ready")
         return
     end
 
@@ -109,10 +139,10 @@ Nexus:AddCommand("phosphy:set", function(message)
         local toggle = bridge.Toggles[id]
         if toggle then
             toggle:SetValue(value == true)
-            Nexus:Log("Toggle " .. tostring(id) .. " = " .. tostring(value == true))
+            safeLog("Toggle " .. tostring(id) .. " = " .. tostring(value == true))
             task.delay(0.25, collectState)
         else
-            Nexus:Log("Missing toggle: " .. tostring(id))
+            safeLog("Missing toggle: " .. tostring(id))
         end
         return
     end
@@ -121,10 +151,10 @@ Nexus:AddCommand("phosphy:set", function(message)
         local option = bridge.Options[id]
         if option then
             option:SetValue(value)
-            Nexus:Log("Option " .. tostring(id) .. " = " .. tostring(value))
+            safeLog("Option " .. tostring(id) .. " = " .. tostring(value))
             task.delay(0.25, collectState)
         else
-            Nexus:Log("Missing option: " .. tostring(id))
+            safeLog("Missing option: " .. tostring(id))
         end
         return
     end
@@ -132,15 +162,18 @@ Nexus:AddCommand("phosphy:set", function(message)
     if kind == "button" then
         if id == "unload" and bridge.Library then
             bridge.Library:Unload()
-            Nexus:Log("Phosphy unloaded")
+            safeLog("Phosphy unloaded")
         end
         return
     end
 
-    Nexus:Log("Unknown phosphy control kind: " .. tostring(kind))
+    safeLog("Unknown phosphy control kind: " .. tostring(kind))
 end)
 
-Nexus:Log("Phosphy Nexus autoexec ready")
+task.spawn(function()
+    Nexus:Connect(RELAY_HOST, true)
+end)
+
 task.spawn(function()
     while task.wait(3) do
         if Nexus.IsConnected then

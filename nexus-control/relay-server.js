@@ -163,7 +163,8 @@ wss.on("connection", (socket, request) => {
   });
 
   socket.on("close", () => {
-    if (accounts.get(name)?.socket === socket) accounts.delete(name);
+    if (accounts.get(name)?.socket !== socket) return;
+    accounts.delete(name);
     pushLog({ source: name, content: "disconnected" });
     broadcast({ type: "accounts", accounts: accountList() });
   });
