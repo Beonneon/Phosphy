@@ -1,0 +1,746 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Phosphy Nexus Control</title>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <style>
+    :root {
+      --bg: #10100f;
+      --surface: #171817;
+      --panel: #1d1e1c;
+      --panel-2: #22231f;
+      --line: #343732;
+      --line-soft: #252822;
+      --text: #f5f3ee;
+      --muted: #aaa59a;
+      --faint: #706b61;
+      --accent: #00c8b4;
+      --accent-soft: rgba(0, 200, 180, 0.22);
+      --danger: #ff6b79;
+      --warn: #ffcf66;
+      --shadow: 0 0 22px rgba(0, 200, 180, 0.18);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 15% 0%, rgba(0, 200, 180, 0.08), transparent 32rem),
+        radial-gradient(circle at 80% 10%, rgba(255, 255, 255, 0.035), transparent 26rem),
+        var(--bg);
+      color: var(--text);
+      font: 14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button, input, select, textarea {
+      font: inherit;
+      color: inherit;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 76px minmax(270px, 330px) 1fr;
+    }
+
+    .rail {
+      border-right: 1px solid var(--line);
+      background: #121311;
+      padding: 16px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .logo {
+      width: 44px;
+      height: 44px;
+      margin: 0 auto 12px;
+      border-radius: 13px;
+      border: 1px solid rgba(0, 200, 180, 0.45);
+      display: grid;
+      place-items: center;
+      box-shadow: var(--shadow);
+      color: var(--accent);
+      background: linear-gradient(180deg, rgba(0, 200, 180, 0.12), rgba(0, 200, 180, 0.03));
+    }
+
+    .nav-btn {
+      position: relative;
+      width: 52px;
+      height: 52px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      background: transparent;
+      display: grid;
+      place-items: center;
+      color: #c7c1b7;
+      cursor: pointer;
+    }
+
+    .nav-btn:hover, .nav-btn.active {
+      border-color: var(--line);
+      background: var(--panel);
+      color: var(--accent);
+      box-shadow: inset 2px 0 0 var(--accent);
+    }
+
+    .nav-btn::after {
+      content: attr(data-tip);
+      position: absolute;
+      left: 62px;
+      top: 50%;
+      transform: translateY(-50%);
+      padding: 7px 9px;
+      border-radius: 7px;
+      border: 1px solid var(--line);
+      background: #141513;
+      color: var(--text);
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .12s ease;
+      z-index: 20;
+    }
+
+    .nav-btn:hover::after { opacity: 1; }
+
+    .sidebar {
+      border-right: 1px solid var(--line);
+      background: rgba(20, 21, 19, 0.94);
+      padding: 18px;
+      overflow: auto;
+    }
+
+    .main {
+      min-width: 0;
+      padding: 18px;
+      overflow: auto;
+    }
+
+    .title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      letter-spacing: .01em;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 14px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      background: var(--surface);
+      font-size: 12px;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--danger);
+      box-shadow: 0 0 10px currentColor;
+    }
+
+    .dot.ok { background: var(--accent); }
+
+    .card, .control-card {
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(255,255,255,.018), rgba(255,255,255,0)), var(--panel);
+      border-radius: 8px;
+      box-shadow: 0 0 0 1px rgba(0, 200, 180, 0.03), var(--shadow);
+    }
+
+    .card { padding: 14px; margin-bottom: 14px; }
+
+    .field { margin-bottom: 12px; }
+    .field label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #111210;
+      padding: 9px 10px;
+      outline: none;
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 112px;
+      font-family: Consolas, "Courier New", monospace;
+    }
+
+    input:focus, select:focus, textarea:focus {
+      border-color: rgba(0, 200, 180, .75);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+
+    .btn {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel-2);
+      min-height: 38px;
+      padding: 8px 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      cursor: pointer;
+      transition: border-color .12s ease, transform .12s ease, background .12s ease;
+    }
+
+    .btn:hover {
+      border-color: rgba(0, 200, 180, .55);
+      background: #252822;
+    }
+
+    .btn:active { transform: translateY(1px); }
+    .btn.primary {
+      border-color: rgba(0, 200, 180, .7);
+      background: linear-gradient(180deg, rgba(0, 200, 180, .26), rgba(0, 200, 180, .1));
+      color: #eafffc;
+    }
+
+    .btn.danger {
+      border-color: rgba(255, 107, 121, .55);
+      color: #ffdce0;
+    }
+
+    .row { display: flex; gap: 9px; align-items: center; }
+    .row > * { flex: 1; }
+
+    .accounts {
+      display: grid;
+      gap: 8px;
+    }
+
+    .account {
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      background: #141513;
+      padding: 10px;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 9px;
+      align-items: center;
+      cursor: pointer;
+    }
+
+    .account.selected {
+      border-color: rgba(0, 200, 180, .8);
+      background: rgba(0, 200, 180, .08);
+    }
+
+    .account strong { display: block; font-size: 13px; }
+    .account span { color: var(--muted); font-size: 12px; }
+
+    .toolbar {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+
+    .tool {
+      min-height: 112px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #141513;
+      display: grid;
+      place-items: center;
+      gap: 8px;
+      color: var(--muted);
+      cursor: pointer;
+      text-align: center;
+    }
+
+    .tool:hover {
+      color: var(--text);
+      border-color: rgba(0, 200, 180, .55);
+      box-shadow: var(--shadow);
+    }
+
+    .tool i { color: var(--accent); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .control-card { padding: 14px; }
+
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      margin: 14px 0 10px;
+    }
+
+    .divider::before, .divider::after {
+      content: "";
+      height: 1px;
+      flex: 1;
+      background: linear-gradient(90deg, transparent, rgba(0,200,180,.5), transparent);
+    }
+
+    .toggle-line {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border: 1px solid var(--line-soft);
+      border-radius: 7px;
+      padding: 9px 10px;
+      margin-bottom: 8px;
+      background: #151614;
+    }
+
+    .switch {
+      width: 38px;
+      height: 22px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #363832;
+      padding: 2px;
+    }
+
+    .switch::before {
+      content: "";
+      display: block;
+      width: 16px;
+      height: 16px;
+      border-radius: 999px;
+      background: #f0efe9;
+      transition: transform .12s ease, background .12s ease;
+    }
+
+    .switch.on {
+      background: rgba(0, 200, 180, .28);
+      border-color: var(--accent);
+    }
+
+    .switch.on::before {
+      transform: translateX(16px);
+      background: var(--accent);
+    }
+
+    .log {
+      height: 280px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0d0e0d;
+      padding: 10px;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+      color: #dedbd1;
+    }
+
+    .log-line { margin-bottom: 5px; }
+    .log-line b { color: var(--accent); }
+
+    .hidden { display: none; }
+
+    @media (max-width: 980px) {
+      .app { grid-template-columns: 62px 1fr; }
+      .sidebar { grid-column: 2; }
+      .main { grid-column: 1 / -1; }
+      .toolbar { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="rail">
+      <div class="logo"><i data-lucide="gem"></i></div>
+      <button class="nav-btn active" data-view="dashboard" data-tip="Dashboard"><i data-lucide="layout-dashboard"></i></button>
+      <button class="nav-btn" data-view="controls" data-tip="Phosphy Controls"><i data-lucide="sliders-horizontal"></i></button>
+      <button class="nav-btn" data-view="execute" data-tip="Execute"><i data-lucide="terminal-square"></i></button>
+      <button class="nav-btn" data-view="settings" data-tip="Settings"><i data-lucide="settings"></i></button>
+    </aside>
+
+    <aside class="sidebar">
+      <div class="title">
+        <h1>Phosphy Nexus</h1>
+        <span class="pill"><span id="statusDot" class="dot"></span><span id="statusText">Offline</span></span>
+      </div>
+
+      <section class="card">
+        <h2>Connection</h2>
+        <div class="field">
+          <label>Relay WebSocket URL</label>
+          <input id="relayUrl" placeholder="ws://localhost:8787/admin">
+        </div>
+        <div class="field">
+          <label>Admin Key</label>
+          <input id="adminKey" type="password" placeholder="change-me">
+        </div>
+        <button id="connectBtn" class="btn primary" style="width:100%"><i data-lucide="plug-zap"></i>Connect</button>
+      </section>
+
+      <section class="card">
+        <div class="title">
+          <h2 style="margin:0">Accounts</h2>
+          <button id="selectAllBtn" class="btn" style="min-height:30px;padding:4px 8px">All</button>
+        </div>
+        <div id="accounts" class="accounts"></div>
+      </section>
+    </aside>
+
+    <main class="main">
+      <section id="dashboardView">
+        <div class="toolbar">
+          <button class="tool" data-command="rejoin"><i data-lucide="rotate-ccw"></i><span>Rejoin</span></button>
+          <button class="tool" data-command="mute"><i data-lucide="volume-x"></i><span>Mute</span></button>
+          <button class="tool" data-command="unmute"><i data-lucide="volume-2"></i><span>Unmute</span></button>
+          <button class="tool" data-command="performance 8"><i data-lucide="zap"></i><span>Performance</span></button>
+          <button class="tool" data-view-jump="settings"><i data-lucide="shield-check"></i><span>Relay Settings</span></button>
+        </div>
+
+        <div class="grid">
+          <section class="control-card">
+            <h2>Quick Command</h2>
+            <div class="row">
+              <input id="rawCommand" placeholder="rejoin, mute, performance 6, teleport place job">
+              <button id="sendRawBtn" class="btn primary"><i data-lucide="send"></i>Send</button>
+            </div>
+            <div class="divider">Target</div>
+            <p style="color:var(--muted);margin:0">Commands go to selected accounts. If none are selected, they go to all connected accounts.</p>
+          </section>
+
+          <section class="control-card">
+            <h2>Logs</h2>
+            <div id="log" class="log"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="controlsView" class="hidden">
+        <div class="grid">
+          <section class="control-card">
+            <h2>Main</h2>
+            <div id="mainToggles"></div>
+            <div class="divider">Options</div>
+            <div class="field"><label>EggSelect</label><input data-option="EggSelect" placeholder="Starter"></div>
+            <div class="field"><label>RebirthTier</label><input data-option="RebirthTier" placeholder="1 Rebirth"></div>
+            <div class="field"><label>InfRebirthDelay</label><input data-option="InfRebirthDelay" placeholder="0.5"></div>
+          </section>
+
+          <section class="control-card">
+            <h2>Pets / Economy</h2>
+            <div id="petToggles"></div>
+            <div class="divider">Dropdown Inputs</div>
+            <div class="field"><label>ItemUseSelect (multi table JSON or option value)</label><input data-option="ItemUseSelect" placeholder='{"ClickPotion":true}'></div>
+            <div class="field"><label>PotionCraftSelect</label><input data-option="PotionCraftSelect" placeholder='{"ClickPotion":true}'></div>
+          </section>
+
+          <section class="control-card">
+            <h2>Performance</h2>
+            <div id="performanceToggles"></div>
+            <div class="field"><label>FpsCapValue</label><input data-option="FpsCapValue" placeholder="60"></div>
+          </section>
+
+          <section class="control-card">
+            <h2>Webhook / Settings</h2>
+            <div id="miscToggles"></div>
+            <div class="field"><label>WebhookSummaryMinutes</label><input data-option="WebhookSummaryMinutes" placeholder="10"></div>
+            <button class="btn danger" data-button="unload"><i data-lucide="power"></i>Unload Phosphy</button>
+          </section>
+        </div>
+      </section>
+
+      <section id="executeView" class="hidden">
+        <div class="grid">
+          <section class="control-card">
+            <h2>Execute Lua</h2>
+            <textarea id="scriptBox" spellcheck="false">print("hello from dashboard")</textarea>
+            <div class="row" style="margin-top:10px">
+              <button id="runSelectedBtn" class="btn primary"><i data-lucide="play"></i>Run on target</button>
+              <button id="clearScriptBtn" class="btn"><i data-lucide="eraser"></i>Clear</button>
+            </div>
+          </section>
+          <section class="control-card">
+            <h2>Teleport</h2>
+            <div class="field"><label>PlaceId</label><input id="placeId" placeholder="123456"></div>
+            <div class="field"><label>JobId (optional)</label><input id="jobId" placeholder="server job id"></div>
+            <button id="teleportBtn" class="btn primary" style="width:100%"><i data-lucide="map-pin"></i>Teleport</button>
+          </section>
+        </div>
+      </section>
+
+      <section id="settingsView" class="hidden">
+        <div class="grid">
+          <section class="control-card">
+            <h2>How It Connects</h2>
+            <p style="color:var(--muted)">For remote control, accounts should connect straight to the relay host from the autoexec. The dashboard can be hosted on Vercel, but the relay needs a WebSocket host such as Railway, Render, Fly.io, a VPS, or your home PC with a tunnel.</p>
+            <p style="color:var(--muted)">Local-only mode: set relay URL to <code>ws://localhost:8787/admin</code> and autoexec <code>RELAY_HOST</code> to <code>localhost:8787</code>.</p>
+          </section>
+          <section class="control-card">
+            <h2>Saved Browser Settings</h2>
+            <button id="saveSettingsBtn" class="btn primary"><i data-lucide="save"></i>Save connection settings</button>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const state = {
+      ws: null,
+      accounts: [],
+      selected: new Set(),
+      logs: [],
+    };
+
+    const toggleGroups = {
+      mainToggles: [
+        ["ToggleAC", "Auto Click"],
+        ["ToggleAH", "Auto Hatch"],
+        ["ToggleAutoRebirth", "Auto Rebirth"],
+        ["ToggleAutoSpin", "Auto Spin"],
+        ["ToggleConvertSpins", "Convert Spins"],
+        ["ToggleAutoEvilSpin", "Auto Evil Spin"],
+      ],
+      petToggles: [
+        ["ToggleAutoEquipBest", "Auto Equip Best"],
+        ["ToggleNoHatchAnim", "No Hatch Animation"],
+        ["ToggleAutoUseItems", "Auto Use Items"],
+        ["ToggleAutoPotionCraft", "Auto Potion Craft"],
+        ["ToggleAutoUpgrade", "Auto Upgrade"],
+        ["ToggleAutoBuy", "Auto Buy Fruit Shop"],
+        ["ToggleClaimGifts", "Claim Gifts"],
+        ["ToggleClaimDaily", "Claim Daily"],
+        ["ToggleClaimAchievements", "Claim Achievements"],
+        ["ToggleClaimChests", "Claim Chests"],
+        ["ToggleClaimSeason", "Claim Season"],
+        ["ToggleClaimQuests", "Claim Quests"],
+      ],
+      performanceToggles: [
+        ["TogglePerformance", "Performance Boost"],
+        ["ToggleFpsCap", "FPS Cap"],
+        ["ToggleDisable3D", "Disable 3D Rendering"],
+      ],
+      miscToggles: [
+        ["ToggleWebhook", "Alert Webhook"],
+        ["ToggleWebhookSummary", "Summary Webhook"],
+        ["ToggleAutoSettings", "Auto Settings"],
+        ["ToggleDisableAutoRejoin", "Disable Auto Rejoin"],
+      ],
+    };
+
+    function qs(id) { return document.getElementById(id); }
+    function targets() { return state.selected.size ? Array.from(state.selected) : "all"; }
+
+    function send(payload) {
+      if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+        addLog("ui", "Not connected to relay");
+        return;
+      }
+      state.ws.send(JSON.stringify(payload));
+    }
+
+    function addLog(source, content, time = Date.now()) {
+      state.logs.push({ source, content, time });
+      while (state.logs.length > 300) state.logs.shift();
+      renderLogs();
+    }
+
+    function renderLogs() {
+      qs("log").innerHTML = state.logs.slice(-120).reverse().map((line) => {
+        const t = new Date(line.time).toLocaleTimeString();
+        return `<div class="log-line"><span style="color:var(--faint)">${t}</span> <b>${escapeHtml(line.source)}</b> ${escapeHtml(String(line.content))}</div>`;
+      }).join("");
+    }
+
+    function escapeHtml(value) {
+      return value.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+    }
+
+    function setConnected(connected) {
+      qs("statusDot").classList.toggle("ok", connected);
+      qs("statusText").textContent = connected ? "Online" : "Offline";
+      qs("connectBtn").innerHTML = connected ? '<i data-lucide="plug"></i>Disconnect' : '<i data-lucide="plug-zap"></i>Connect';
+      lucide.createIcons();
+    }
+
+    function renderAccounts() {
+      const box = qs("accounts");
+      if (!state.accounts.length) {
+        box.innerHTML = `<div style="color:var(--muted);font-size:13px">No accounts connected.</div>`;
+        return;
+      }
+      box.innerHTML = state.accounts.map((account) => {
+        const selected = state.selected.has(account.name);
+        const age = Math.max(0, Math.floor((Date.now() - account.lastPing) / 1000));
+        return `<div class="account ${selected ? "selected" : ""}" data-account="${escapeHtml(account.name)}">
+          <span class="dot ok"></span>
+          <div><strong>${escapeHtml(account.name)}</strong><span>${escapeHtml(account.id)} · ping ${age}s</span></div>
+          <i data-lucide="${selected ? "check-square" : "square"}"></i>
+        </div>`;
+      }).join("");
+      lucide.createIcons();
+    }
+
+    function connect() {
+      if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+        state.ws.close();
+        return;
+      }
+      const rawUrl = qs("relayUrl").value.trim() || "ws://localhost:8787/admin";
+      const key = encodeURIComponent(qs("adminKey").value || "change-me");
+      const joiner = rawUrl.includes("?") ? "&" : "?";
+      const url = `${rawUrl}${joiner}key=${key}`;
+      localStorage.setItem("nexusRelayUrl", rawUrl);
+      localStorage.setItem("nexusAdminKey", qs("adminKey").value || "change-me");
+
+      const ws = new WebSocket(url);
+      state.ws = ws;
+
+      ws.onopen = () => { setConnected(true); addLog("ui", "connected to relay"); };
+      ws.onclose = () => { setConnected(false); addLog("ui", "disconnected from relay"); };
+      ws.onerror = () => addLog("ui", "relay connection error");
+      ws.onmessage = (event) => {
+        let message;
+        try { message = JSON.parse(event.data); } catch { return; }
+        if (message.type === "hello") {
+          state.accounts = message.accounts || [];
+          state.logs = message.logs || [];
+          renderAccounts();
+          renderLogs();
+        }
+        if (message.type === "accounts") {
+          state.accounts = message.accounts || [];
+          renderAccounts();
+        }
+        if (message.type === "log") {
+          addLog(message.log.source, message.log.content, message.log.time);
+        }
+      };
+    }
+
+    function parseOptionValue(raw) {
+      const text = raw.trim();
+      if (!text) return "";
+      if ((text.startsWith("{") && text.endsWith("}")) || (text.startsWith("[") && text.endsWith("]"))) {
+        try { return JSON.parse(text); } catch {}
+      }
+      if (text === "true") return true;
+      if (text === "false") return false;
+      const num = Number(text);
+      if (!Number.isNaN(num) && text.match(/^-?\d+(\.\d+)?$/)) return num;
+      return text;
+    }
+
+    function buildToggles() {
+      for (const [container, toggles] of Object.entries(toggleGroups)) {
+        qs(container).innerHTML = toggles.map(([id, label]) => (
+          `<button class="toggle-line" data-toggle="${id}">
+            <span>${label}</span>
+            <span class="switch"></span>
+          </button>`
+        )).join("");
+      }
+    }
+
+    document.addEventListener("click", (event) => {
+      const nav = event.target.closest("[data-view]");
+      if (nav) {
+        document.querySelectorAll(".nav-btn").forEach((btn) => btn.classList.toggle("active", btn === nav));
+        document.querySelectorAll("main > section").forEach((section) => section.classList.add("hidden"));
+        qs(`${nav.dataset.view}View`).classList.remove("hidden");
+      }
+
+      const jump = event.target.closest("[data-view-jump]");
+      if (jump) document.querySelector(`[data-view="${jump.dataset.viewJump}"]`).click();
+
+      const account = event.target.closest("[data-account]");
+      if (account) {
+        const name = account.dataset.account;
+        if (state.selected.has(name)) state.selected.delete(name); else state.selected.add(name);
+        renderAccounts();
+      }
+
+      const cmd = event.target.closest("[data-command]");
+      if (cmd) send({ type: "command", targets: targets(), command: cmd.dataset.command });
+
+      const toggle = event.target.closest("[data-toggle]");
+      if (toggle) {
+        const sw = toggle.querySelector(".switch");
+        const value = !sw.classList.contains("on");
+        sw.classList.toggle("on", value);
+        send({ type: "phosphy", targets: targets(), payload: { kind: "toggle", id: toggle.dataset.toggle, value } });
+      }
+
+      const button = event.target.closest("[data-button]");
+      if (button) send({ type: "phosphy", targets: targets(), payload: { kind: "button", id: button.dataset.button } });
+    });
+
+    document.addEventListener("change", (event) => {
+      const input = event.target.closest("[data-option]");
+      if (input) {
+        send({ type: "phosphy", targets: targets(), payload: { kind: "option", id: input.dataset.option, value: parseOptionValue(input.value) } });
+      }
+    });
+
+    qs("connectBtn").addEventListener("click", connect);
+    qs("selectAllBtn").addEventListener("click", () => {
+      if (state.selected.size === state.accounts.length) state.selected.clear();
+      else state.accounts.forEach((a) => state.selected.add(a.name));
+      renderAccounts();
+    });
+    qs("sendRawBtn").addEventListener("click", () => send({ type: "command", targets: targets(), command: qs("rawCommand").value }));
+    qs("runSelectedBtn").addEventListener("click", () => send({ type: "script", targets: targets(), script: qs("scriptBox").value }));
+    qs("clearScriptBtn").addEventListener("click", () => qs("scriptBox").value = "");
+    qs("teleportBtn").addEventListener("click", () => {
+      const place = qs("placeId").value.trim();
+      const job = qs("jobId").value.trim();
+      if (place) send({ type: "command", targets: targets(), command: `teleport ${place}${job ? " " + job : ""}` });
+    });
+    qs("saveSettingsBtn").addEventListener("click", () => {
+      localStorage.setItem("nexusRelayUrl", qs("relayUrl").value);
+      localStorage.setItem("nexusAdminKey", qs("adminKey").value);
+      addLog("ui", "settings saved");
+    });
+
+    qs("relayUrl").value = localStorage.getItem("nexusRelayUrl") || "ws://localhost:8787/admin";
+    qs("adminKey").value = localStorage.getItem("nexusAdminKey") || "change-me";
+    buildToggles();
+    renderAccounts();
+    renderLogs();
+    lucide.createIcons();
+  </script>
+</body>
+</html>
