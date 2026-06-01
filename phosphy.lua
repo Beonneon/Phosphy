@@ -34,6 +34,7 @@ local Format = require(Modules:WaitForChild("Format"))
 local CodesModule = require(Modules:WaitForChild("Codes"))
 local AurasModule = require(Modules:WaitForChild("Auras"))
 local TapSkinsModule = require(Modules:WaitForChild("TapSkins"))
+local ExclusiveEggsModule = require(Modules:WaitForChild("ExclusiveEggs"))
 
 repeat task.wait(0.1) until PlayerData.Data and PlayerData.Data.Items
 
@@ -287,9 +288,21 @@ local SummaryMetricList = {
     "Total Eggs Hatched",
     "Total Time Played",
 }
+local SummaryLeaderboardList = {
+    "Total Gems",
+    "Total Eggs",
+    "Total Clicks",
+    "Total Rebirths",
+    "Time Played",
+    "Robux",
+}
 local SummaryMetricDefaultSelected = {}
 for _, metricName in ipairs(SummaryMetricList) do
     SummaryMetricDefaultSelected[metricName] = true
+end
+local SummaryLeaderboardDefaultSelected = {}
+for _, leaderboardName in ipairs(SummaryLeaderboardList) do
+    SummaryLeaderboardDefaultSelected[leaderboardName] = true
 end
 
 local shopData = {}
@@ -728,6 +741,8 @@ do
         Text = "Usernames (user1,user2,...)",
         Placeholder = "player1,player2",
     })
+    AddCheckbox(AutoTradeBox, "ToggleAutoTradeTokens", "Add All Tokens")
+    AddCheckbox(AutoTradeBox, "ToggleAutoTradeExclusiveEggs", "Add All Exclusive Eggs")
     AddCheckbox(AutoTradeBox, "ToggleAutoTrade", "Auto Send Trade Requests")
 
     local MiscBox = Tabs.Misc:AddRightGroupbox("Misc", "shield")
@@ -782,6 +797,12 @@ do
     task.defer(function()
         Options.SummaryMetrics:SetValue(SummaryMetricDefaultSelected)
     end)
+    AddDivider(SummaryWebhookBox, "Leaderboards")
+    AddDropdown(SummaryWebhookBox, "SummaryLeaderboards", "Leaderboard Places", SummaryLeaderboardList, SummaryLeaderboardDefaultSelected, true)
+    task.defer(function()
+        Options.SummaryLeaderboards:SetValue(SummaryLeaderboardDefaultSelected)
+    end)
+    AddCheckbox(SummaryWebhookBox, "ToggleSummaryLeaderboards", "Include Leaderboard Places")
     AddDivider(SummaryWebhookBox, "Timer")
     AddSlider(SummaryWebhookBox, "WebhookSummaryMinutes", "Every", 1, 60, 10, "m")
     AddCheckbox(SummaryWebhookBox, "ToggleWebhookSummary", "Summary Webhook")
@@ -2171,10 +2192,21 @@ local function RemoveFpsCap()
     setfpscap(0)
 end
 
+local function StartFpsCapLoop()
+    StopTask("FpsCap")
+    Tasks.FpsCap = task.spawn(function()
+        while Toggles.ToggleFpsCap.Value do
+            ApplyFpsCap()
+            task.wait(1)
+        end
+    end)
+end
+
 Toggles.ToggleFpsCap:OnChanged(function(state)
     if state then
-        ApplyFpsCap()
+        StartFpsCapLoop()
     else
+        StopTask("FpsCap")
         RemoveFpsCap()
     end
 end)
@@ -2288,6 +2320,24 @@ end)
 local autoConfirmTradeConn = nil
 local currentTradePartner = nil
 
+local function GetAutoTradeOfferDelay()
+    if not (Toggles.ToggleAutoTradeTokens.Value or Toggles.ToggleAutoTradeExclusiveEggs.Value) then
+        return 0.75
+    end
+
+    local seconds = 1
+    if Toggles.ToggleAutoTradeTokens.Value and (tonumber(PlayerData.Data.Tokens) or 0) > 0 then
+        seconds = seconds + 0.3
+    end
+    if Toggles.ToggleAutoTradeExclusiveEggs.Value then
+        for eggName in pairs(ExclusiveEggsModule.ExclusiveEggs or ExclusiveEggsModule) do
+            seconds = seconds + ((tonumber(PlayerData.Data[eggName]) or 0) * 0.13)
+        end
+    end
+
+    return math.max(seconds, 0.75)
+end
+
 local function InstallAutoConfirmTrade()
     if autoConfirmTradeConn then
         autoConfirmTradeConn:Disconnect()
@@ -2317,7 +2367,7 @@ local function InstallAutoConfirmTrade()
             confirmDebounce = nil
         end
 
-        confirmDebounce = task.delay(0.75, function()
+        confirmDebounce = task.delay(GetAutoTradeOfferDelay(), function()
             confirmDebounce = nil
             if not Toggles.ToggleAutoConfirmTrade.Value then return end
             if not currentTradePartner then return end
@@ -2341,6 +2391,70 @@ Toggles.ToggleAutoConfirmTrade:OnChanged(function(state)
         currentTradePartner = nil
     end
 end)
+
+local autoTradeOfferConn = nil
+
+local function AddAutoTradeOffer(partnerName)
+    if not partnerName then return end
+    StopTask("AutoTradeOffer")
+
+    Tasks.AutoTradeOffer = task.spawn(function()
+        task.wait(0.75)
+
+        if Toggles.ToggleAutoTradeTokens.Value then
+            local tokens = tonumber(PlayerData.Data.Tokens) or 0
+            if tokens > 0 then
+                TradeRemote:FireServer({ "AddTokens", tokens, partnerName })
+                task.wait(0.2)
+            end
+        end
+
+        if Toggles.ToggleAutoTradeExclusiveEggs.Value then
+            for eggName in pairs(ExclusiveEggsModule.ExclusiveEggs or ExclusiveEggsModule) do
+                if not Toggles.ToggleAutoTradeExclusiveEggs.Value then break end
+
+                local amount = tonumber(PlayerData.Data[eggName]) or 0
+                for _ = 1, amount do
+                    if not Toggles.ToggleAutoTradeExclusiveEggs.Value then break end
+                    TradeRemote:FireServer({ "AddEgg", eggName, partnerName, "Add" })
+                    task.wait(0.12)
+                end
+            end
+        end
+    end)
+end
+
+local function InstallAutoTradeOfferListener()
+    if autoTradeOfferConn then
+        autoTradeOfferConn:Disconnect()
+        autoTradeOfferConn = nil
+    end
+
+    autoTradeOfferConn = TradeRemote.OnClientEvent:Connect(function(eventType, partnerName)
+        if eventType == "CreateTrade" then
+            if Toggles.ToggleAutoTradeTokens.Value or Toggles.ToggleAutoTradeExclusiveEggs.Value then
+                AddAutoTradeOffer(partnerName)
+            end
+        elseif eventType == "ClearTrade" or eventType == "TradeEnd" then
+            StopTask("AutoTradeOffer")
+        end
+    end)
+end
+
+local function UpdateAutoTradeOfferListener()
+    if Toggles.ToggleAutoTradeTokens.Value or Toggles.ToggleAutoTradeExclusiveEggs.Value then
+        InstallAutoTradeOfferListener()
+    else
+        if autoTradeOfferConn then
+            autoTradeOfferConn:Disconnect()
+            autoTradeOfferConn = nil
+        end
+        StopTask("AutoTradeOffer")
+    end
+end
+
+Toggles.ToggleAutoTradeTokens:OnChanged(UpdateAutoTradeOfferListener)
+Toggles.ToggleAutoTradeExclusiveEggs:OnChanged(UpdateAutoTradeOfferListener)
 
 local function StartAutoTrade()
     StopTask("AutoTrade")
@@ -2952,6 +3066,12 @@ local SummaryMetricIcons = {
     ["Total Tokens"] = "🪙 Total Tokens",
     ["Total Eggs Hatched"] = "🥚 Total Eggs Hatched",
     ["Total Time Played"] = "⏱ Total Time Played",
+    ["Total Gems Place"] = "Gems Place",
+    ["Total Eggs Place"] = "Eggs Place",
+    ["Total Clicks Place"] = "Clicks Place",
+    ["Total Rebirths Place"] = "Rebirths Place",
+    ["Time Played Place"] = "Time Played Place",
+    ["Robux Place"] = "Robux Place",
 }
 
 local function normalizeStatName(name)
@@ -3020,6 +3140,98 @@ local function GetDisplayStat(primaryNames, fallbackNames)
     end
 
     return "0"
+end
+
+local SummaryLeaderboardAliases = {
+    ["Total Gems"] = { "TotalGems", "Gems", "Gem" },
+    ["Total Eggs"] = { "TotalEggs", "Eggs", "EggsHatched", "TotalEggsHatched" },
+    ["Total Clicks"] = { "TotalClicks", "Clicks", "Click" },
+    ["Total Rebirths"] = { "TotalRebirths", "Rebirths", "Rebirth" },
+    ["Time Played"] = { "TimePlayed", "Playtime", "PlayTime", "TotalTimePlayed" },
+    ["Robux"] = { "Robux", "RobuxSpent", "TotalRobux" },
+}
+
+local function FormatLeaderboardPlace(value)
+    if value == nil then return "N/A" end
+    local numeric = parseCompactNumber(value)
+    if numeric then return "#" .. fmtNum(numeric) end
+    return tostring(value)
+end
+
+local function ReadLeaderboardPlace(label)
+    local data = PlayerData.Data or {}
+    local aliases = SummaryLeaderboardAliases[label] or { label }
+    local exactKeys = {}
+    local aliasKeys = {}
+    local placeKeys = { "Place", "Rank", "Position", "LeaderboardPlace", "LeaderboardRank" }
+
+    for _, alias in ipairs(aliases) do
+        aliasKeys[normalizeStatName(alias)] = true
+        for _, suffix in ipairs(placeKeys) do
+            exactKeys[normalizeStatName(alias .. suffix)] = true
+            exactKeys[normalizeStatName(suffix .. alias)] = true
+        end
+    end
+
+    local function readPlaceTable(tbl)
+        for _, key in ipairs(placeKeys) do
+            local value = tbl[key] or tbl[key:lower()] or tbl[key:upper()]
+            if type(value) == "number" or type(value) == "string" then
+                return value
+            end
+        end
+        return nil
+    end
+
+    local function scan(tbl, depth)
+        if type(tbl) ~= "table" or depth > 3 then return nil end
+
+        for key, value in pairs(tbl) do
+            local normalized = normalizeStatName(key)
+            if exactKeys[normalized] and (type(value) == "number" or type(value) == "string") then
+                return value
+            end
+
+            if aliasKeys[normalized] and type(value) == "table" then
+                local place = readPlaceTable(value)
+                if place ~= nil then return place end
+            end
+        end
+
+        for key, value in pairs(tbl) do
+            if type(value) == "table" then
+                local normalized = normalizeStatName(key)
+                if normalized:find("leaderboard", 1, true)
+                    or normalized:find("rank", 1, true)
+                    or normalized:find("place", 1, true)
+                    or normalized:find("top", 1, true)
+                then
+                    local found = scan(value, depth + 1)
+                    if found ~= nil then return found end
+                end
+            end
+        end
+
+        return nil
+    end
+
+    return FormatLeaderboardPlace(scan(data, 0))
+end
+
+local function AddSummaryLeaderboardMetrics(entries)
+    if not (Toggles.ToggleSummaryLeaderboards and Toggles.ToggleSummaryLeaderboards.Value) then return end
+
+    local selected = Options.SummaryLeaderboards and Options.SummaryLeaderboards.Value
+    if type(selected) ~= "table" then return end
+
+    for _, leaderboardName in ipairs(SummaryLeaderboardList) do
+        if selected[leaderboardName] then
+            table.insert(entries, {
+                Name = leaderboardName .. " Place",
+                Value = ReadLeaderboardPlace(leaderboardName),
+            })
+        end
+    end
 end
 
 local function GetTotalTimePlayed()
@@ -3130,6 +3342,7 @@ local function BuildSummaryMetricEntries(totals, itemBreakdown)
         "EggsHatched",
     }, { "Eggs" }))
     AddSummaryMetric(entries, "Total Time Played", fmtDuration(GetTotalTimePlayed()))
+    AddSummaryLeaderboardMetrics(entries)
     return entries
 end
 
@@ -3390,6 +3603,10 @@ Library:OnUnload(function()
     if autoConfirmTradeConn then
         autoConfirmTradeConn:Disconnect()
         autoConfirmTradeConn = nil
+    end
+    if autoTradeOfferConn then
+        autoTradeOfferConn:Disconnect()
+        autoTradeOfferConn = nil
     end
     if PhosphyWebhookCleanup then
         PhosphyWebhookCleanup()
