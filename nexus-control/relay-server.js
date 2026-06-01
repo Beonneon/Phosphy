@@ -26,6 +26,7 @@ function accountList() {
     placeId: account.placeId || "",
     connectedAt: account.connectedAt,
     lastPing: account.lastPing,
+    phosphyState: account.phosphyState || { Toggles: {}, Options: {} },
   }));
 }
 
@@ -144,6 +145,15 @@ wss.on("connection", (socket, request) => {
       }
       if (message.Name === "Log") {
         pushLog({ source: name, content: message.Payload?.Content ?? "" });
+        return;
+      }
+      if (message.Name === "PhosphyState") {
+        try {
+          account.phosphyState = JSON.parse(message.Payload?.Content || "{}");
+          broadcast({ type: "accounts", accounts: accountList() });
+        } catch {
+          pushLog({ source: name, content: "bad PhosphyState payload" });
+        }
         return;
       }
       pushLog({ source: name, content: `${message.Name}: ${JSON.stringify(message.Payload || {})}` });

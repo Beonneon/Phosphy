@@ -15,6 +15,7 @@ local HttpService = game:GetService("HttpService")
 if not getgenv().Nexus then
     local ok, source = pcall(game.HttpGet, game, NEXUS_URL)
     if ok and source then
+        source = source:gsub("if not Nexus_Version then%s*Nexus:Connect%(%s*%)%s*end", "")
         loadstring(source, "Nexus")()
     end
 end
@@ -61,6 +62,32 @@ local function waitForBridge()
     return nil
 end
 
+local function collectState()
+    local bridge = waitForBridge()
+    if not bridge then return end
+
+    local toggles = {}
+    for id, toggle in pairs(bridge.Toggles) do
+        if type(id) == "string" and toggle and toggle.Value ~= nil then
+            toggles[id] = toggle.Value == true
+        end
+    end
+
+    local options = {}
+    for id, option in pairs(bridge.Options) do
+        if type(id) == "string" and option and option.Value ~= nil then
+            options[id] = option.Value
+        end
+    end
+
+    Nexus:Send("PhosphyState", {
+        Content = HttpService:JSONEncode({
+            Toggles = toggles,
+            Options = options,
+        })
+    })
+end
+
 Nexus:AddCommand("phosphy:set", function(message)
     local ok, payload = pcall(HttpService.JSONDecode, HttpService, message)
     if not ok or type(payload) ~= "table" then
@@ -83,6 +110,7 @@ Nexus:AddCommand("phosphy:set", function(message)
         if toggle then
             toggle:SetValue(value == true)
             Nexus:Log("Toggle " .. tostring(id) .. " = " .. tostring(value == true))
+            task.delay(0.25, collectState)
         else
             Nexus:Log("Missing toggle: " .. tostring(id))
         end
@@ -94,6 +122,7 @@ Nexus:AddCommand("phosphy:set", function(message)
         if option then
             option:SetValue(value)
             Nexus:Log("Option " .. tostring(id) .. " = " .. tostring(value))
+            task.delay(0.25, collectState)
         else
             Nexus:Log("Missing option: " .. tostring(id))
         end
@@ -112,3 +141,10 @@ Nexus:AddCommand("phosphy:set", function(message)
 end)
 
 Nexus:Log("Phosphy Nexus autoexec ready")
+task.spawn(function()
+    while task.wait(3) do
+        if Nexus.IsConnected then
+            collectState()
+        end
+    end
+end)
