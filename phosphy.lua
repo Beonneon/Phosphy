@@ -743,6 +743,7 @@ do
     })
     AddCheckbox(AutoTradeBox, "ToggleAutoTradeTokens", "Add All Tokens")
     AddCheckbox(AutoTradeBox, "ToggleAutoTradeExclusiveEggs", "Add All Exclusive Eggs")
+    AddCheckbox(AutoTradeBox, "ToggleAutoTradeOnlyWithAssets", "Only Trade If Has Assets")
     AddCheckbox(AutoTradeBox, "ToggleAutoTrade", "Auto Send Trade Requests")
 
     local MiscBox = Tabs.Misc:AddRightGroupbox("Misc", "shield")
@@ -2424,6 +2425,20 @@ local function AddAutoTradeOffer(partnerName)
     end)
 end
 
+local function HasAutoTradeAssets()
+    if (tonumber(PlayerData.Data.Tokens) or 0) > 0 then
+        return true
+    end
+
+    for eggName in pairs(ExclusiveEggsModule.ExclusiveEggs or ExclusiveEggsModule) do
+        if (tonumber(PlayerData.Data[eggName]) or 0) > 0 then
+            return true
+        end
+    end
+
+    return false
+end
+
 local function InstallAutoTradeOfferListener()
     if autoTradeOfferConn then
         autoTradeOfferConn:Disconnect()
@@ -2460,16 +2475,21 @@ local function StartAutoTrade()
     StopTask("AutoTrade")
     Tasks.AutoTrade = task.spawn(function()
         while Toggles.ToggleAutoTrade.Value do
-            local usernames = ParseUsernames(Options.AutoTradeUsernames.Value)
-            if #usernames == 0 then
-                task.wait(3)
-                continue
-            end
+        local usernames = ParseUsernames(Options.AutoTradeUsernames.Value)
+        if #usernames == 0 then
+            task.wait(3)
+            continue
+        end
+        if Toggles.ToggleAutoTradeOnlyWithAssets.Value and not HasAutoTradeAssets() then
+            task.wait(5)
+            continue
+        end
 
-            for _, name in ipairs(usernames) do
-                if not Toggles.ToggleAutoTrade.Value then break end
+        for _, name in ipairs(usernames) do
+            if not Toggles.ToggleAutoTrade.Value then break end
+            if Toggles.ToggleAutoTradeOnlyWithAssets.Value and not HasAutoTradeAssets() then break end
 
-                local target = Players:FindFirstChild(name)
+            local target = Players:FindFirstChild(name)
                 if target and target ~= LocalPlayer then
                     local targetPD = target:FindFirstChild("PlayerData")
                     local inTrade = targetPD and targetPD:FindFirstChild("InTrade") and targetPD.InTrade.Value
