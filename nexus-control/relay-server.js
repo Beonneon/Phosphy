@@ -1,8 +1,13 @@
 import http from "node:http";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 
 const PORT = Number(process.env.PORT || 8787);
 const ADMIN_KEY = process.env.NEXUS_ADMIN_KEY || "change-me";
+const ROOT_DIR = dirname(fileURLToPath(import.meta.url));
+const INDEX_HTML = readFileSync(join(ROOT_DIR, "index.html"));
 
 const accounts = new Map();
 const admins = new Set();
@@ -52,6 +57,12 @@ function sendAccountCommand(targets, command) {
 }
 
 const server = http.createServer((req, res) => {
+  if (req.url === "/" || req.url?.startsWith("/?")) {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(INDEX_HTML);
+    return;
+  }
+
   if (req.url === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: true, accounts: accounts.size }));

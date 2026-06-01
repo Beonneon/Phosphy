@@ -17,6 +17,14 @@
     }
 
     * { box-sizing: border-box; }
+    *::-webkit-scrollbar { width: 10px; height: 10px; }
+    *::-webkit-scrollbar-track { background: #242522; border-radius: 999px; }
+    *::-webkit-scrollbar-thumb {
+      background: #5d6259;
+      border: 2px solid #242522;
+      border-radius: 999px;
+    }
+    *::-webkit-scrollbar-thumb:hover { background: var(--green); }
     html, body {
       margin: 0;
       min-height: 100%;
@@ -109,7 +117,8 @@
     .accounts-head {
       height: 66px;
       display: grid;
-      grid-template-columns: 1fr auto;
+      grid-template-columns: 1fr auto auto;
+      gap: 10px;
       align-items: center;
       padding: 0 26px 0 25px;
       border-bottom: 2px solid var(--line);
@@ -119,6 +128,20 @@
       letter-spacing: 0;
     }
 
+    .mini-action {
+      height: 34px;
+      min-width: 54px;
+      padding: 0 10px;
+      border: 2px solid var(--line-strong);
+      border-radius: 12px;
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 15px;
+      font-weight: 700;
+    }
+    .mini-action:hover { background: #383936; }
+
     .accounts-list {
       height: calc(100% - 66px);
       overflow: auto;
@@ -127,7 +150,7 @@
     .account {
       height: 62px;
       display: grid;
-      grid-template-columns: 29px 1fr auto;
+      grid-template-columns: 29px 1fr;
       align-items: center;
       padding: 0 24px 0 25px;
       border: 0;
@@ -153,13 +176,6 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .account-time {
-      color: var(--muted);
-      font-family: Arial, Helvetica, sans-serif;
-      font-size: 18px;
-      font-weight: 700;
-    }
-
     .connection-panel {
       position: absolute;
       left: 0;
@@ -206,9 +222,14 @@
     }
 
     .box-glyph {
-      font-size: 16px;
-      line-height: 1;
-      transform: translateY(-1px);
+      width: 13px;
+      height: 13px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 14px rgba(41, 206, 106, .65);
+      color: transparent;
+      overflow: hidden;
+      flex: 0 0 auto;
     }
 
     .card-body { padding: 20px 23px 22px 24px; }
@@ -415,16 +436,57 @@
       cursor: pointer;
     }
 
+    .terminal-tabs {
+      height: 43px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 28px 0 28px;
+      border-bottom: 2px solid var(--line);
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+
+    .terminal-tab {
+      flex: 0 0 auto;
+      height: 29px;
+      min-width: 84px;
+      max-width: 230px;
+      padding: 0 12px;
+      border: 2px solid var(--line-strong);
+      border-radius: 12px 12px 0 0;
+      background: #282925;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 15px;
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .terminal-tab.active {
+      color: var(--text);
+      border-color: var(--green);
+      box-shadow: inset 0 -2px 0 var(--green);
+    }
+
     .log {
-      height: 296px;
+      height: 253px;
       padding: 16px 28px;
       overflow: auto;
+      white-space: pre;
       color: #d8d5ce;
       font-family: Consolas, "Courier New", monospace;
       font-size: 17px;
       font-weight: 700;
     }
-    .log-line { margin-bottom: 7px; }
+    .log-line {
+      display: block;
+      width: max-content;
+      min-width: 100%;
+      margin-bottom: 7px;
+    }
     .log-line b { color: var(--green); }
 
     @media (prefers-reduced-motion: no-preference) {
@@ -445,6 +507,7 @@
       <aside class="sidebar">
         <div class="accounts-head">
           <span>ACCOUNTS</span>
+          <button class="mini-action" id="selectAllTopBtn">All</button>
           <span id="accountCount">0</span>
         </div>
         <div class="accounts-list" id="accounts"></div>
@@ -456,6 +519,8 @@
         <input class="form-input small" id="adminKey" type="password" placeholder="change-me">
         <div style="height:10px"></div>
         <button class="btn small-btn" id="selectAllBtn">Select all</button>
+        <div style="height:10px"></div>
+        <div style="color:var(--muted);font-size:15px;font-weight:700" id="selectedHint">Selected: all</div>
       </section>
 
       <main class="main">
@@ -507,6 +572,7 @@
           <span>OUTPUT</span>
           <button class="clear" id="clearLogBtn">Clear</button>
         </div>
+        <div class="terminal-tabs" id="terminalTabs"></div>
         <div class="log" id="log">Connect to your server to see output</div>
       </section>
     </div>
@@ -514,7 +580,7 @@
 
   <script>
     const stage = document.getElementById("stage");
-    const state = { ws: null, accounts: [], selected: new Set(), logs: [] };
+    const state = { ws: null, accounts: [], selected: new Set(), logs: [], terminal: "all" };
 
     const toggles = [
       ["ToggleAC", "Auto Click"], ["ToggleAutoRebirth", "Auto Rebirth"], ["ToggleAutoSpin", "Auto Spin"],
@@ -579,14 +645,29 @@
       renderLogs();
     }
     function renderLogs() {
-      if (!state.logs.length) {
+      const visibleLogs = state.terminal === "all"
+        ? state.logs
+        : state.logs.filter(line => line.source === state.terminal);
+      if (!visibleLogs.length) {
         q("log").textContent = "Connect to your server to see output";
         return;
       }
-        q("log").innerHTML = state.logs.slice(-120).map(line => {
+      q("log").innerHTML = visibleLogs.slice(-120).map(line => {
         const t = new Date(line.time).toLocaleTimeString();
         return `<div class="log-line"><span style="color:#999690">${t}</span> <b>${escapeHtml(line.source)}</b> ${escapeHtml(line.content)}</div>`;
       }).join("");
+    }
+    function renderTerminalTabs() {
+      const sources = ["all", ...state.accounts.map(acc => acc.name)];
+      if (!sources.includes(state.terminal)) state.terminal = "all";
+      q("terminalTabs").innerHTML = sources.map(source => {
+        const label = source === "all" ? "All" : source;
+        return `<button class="terminal-tab ${state.terminal === source ? "active" : ""}" data-terminal="${escapeHtml(source)}">${escapeHtml(label)}</button>`;
+      }).join("");
+    }
+    function updateSelectedHint() {
+      const count = state.selected.size;
+      q("selectedHint").textContent = count ? `Selected: ${count}` : "Selected: all";
     }
     function setConnected(ok) {
       q("onlineDot").classList.toggle("connected", ok);
@@ -594,18 +675,25 @@
       q("connectBtn").textContent = ok ? "Disconnect" : "Connect";
     }
     function renderAccounts() {
-      q("accountCount").textContent = state.accounts.length;
+      const liveNames = new Set(state.accounts.map(acc => acc.name));
+      for (const name of Array.from(state.selected)) {
+        if (!liveNames.has(name)) state.selected.delete(name);
+      }
+      q("accountCount").textContent = state.selected.size ? `${state.selected.size}/${state.accounts.length}` : state.accounts.length;
       if (!state.accounts.length) {
         q("accounts").innerHTML = `<div style="padding:25px;color:var(--muted);font-size:20px;font-weight:700">No accounts connected</div>`;
+        renderTerminalTabs();
+        updateSelectedHint();
         renderControls();
         return;
       }
       q("accounts").innerHTML = state.accounts.map(acc => {
-        const age = Math.max(0, Math.floor((Date.now() - acc.lastPing) / 1000));
         return `<button class="account ${state.selected.has(acc.name) ? "selected" : ""}" data-account="${escapeHtml(acc.name)}">
-          <span class="mini-dot"></span><span class="account-name">${escapeHtml(acc.name)}</span><span class="account-time">${age}s</span>
+          <span class="mini-dot"></span><span class="account-name">${escapeHtml(acc.name)}</span>
         </button>`;
       }).join("");
+      renderTerminalTabs();
+      updateSelectedHint();
       renderControls();
     }
     function renderControls() {
@@ -678,6 +766,12 @@
       }
       const command = event.target.closest("[data-command]");
       if (command) send({ type: "command", targets: targets(), command: command.dataset.command });
+      const terminal = event.target.closest("[data-terminal]");
+      if (terminal) {
+        state.terminal = terminal.dataset.terminal;
+        renderTerminalTabs();
+        renderLogs();
+      }
       const toggle = event.target.closest("[data-toggle]");
       if (toggle) {
         const value = toggle.dataset.value !== "true";
@@ -696,6 +790,7 @@
       else state.accounts.forEach(a => state.selected.add(a.name));
       renderAccounts();
     };
+    q("selectAllTopBtn").onclick = q("selectAllBtn").onclick;
     q("sendRawBtn").onclick = () => send({ type: "command", targets: "all", command: q("rawCommand").value });
     q("runTargetBtn").onclick = () => send({ type: "script", targets: targets(), script: q("scriptBox").value });
     q("runAllBtn").onclick = () => send({ type: "script", targets: "all", script: q("scriptBox").value });
@@ -711,6 +806,7 @@
     setInterval(renderAccounts, 2000);
     fitStage();
     renderAccounts();
+    renderTerminalTabs();
     renderLogs();
   </script>
 </body>
