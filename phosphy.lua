@@ -2462,10 +2462,21 @@ function PhosphyHasAutoTradeAssets()
         return true
     end
 
-    local exclusiveEggs = require(Modules:WaitForChild("ExclusiveEggs"))
-    for eggName in pairs(exclusiveEggs.ExclusiveEggs or exclusiveEggs) do
-        if PhosphyGetExclusiveEggAmount(eggName) > 0 then
-            return true
+    local ok, exclusiveEggs = pcall(function()
+        return require(Modules:WaitForChild("ExclusiveEggs"))
+    end)
+
+    if ok and type(exclusiveEggs) == "table" then
+        for eggName in pairs(exclusiveEggs.ExclusiveEggs or exclusiveEggs) do
+            if PhosphyGetExclusiveEggAmount(eggName) > 0 then
+                return true
+            end
+        end
+    else
+        for _, eggName in ipairs({ "MoltenEgg", "CandyEgg", "SpringEgg", "ExclusiveEgg" }) do
+            if PhosphyGetExclusiveEggAmount(eggName) > 0 then
+                return true
+            end
         end
     end
 
