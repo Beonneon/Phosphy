@@ -287,21 +287,9 @@ PhosphySummaryMetricList = {
     "Total Eggs Hatched",
     "Total Time Played",
 }
-PhosphySummaryLeaderboardList = {
-    "Total Gems",
-    "Total Eggs",
-    "Total Clicks",
-    "Total Rebirths",
-    "Time Played",
-    "Robux",
-}
 PhosphySummaryMetricDefaultSelected = {}
 for _, metricName in ipairs(PhosphySummaryMetricList) do
     PhosphySummaryMetricDefaultSelected[metricName] = true
-end
-PhosphySummaryLeaderboardDefaultSelected = {}
-for _, leaderboardName in ipairs(PhosphySummaryLeaderboardList) do
-    PhosphySummaryLeaderboardDefaultSelected[leaderboardName] = true
 end
 
 local shopData = {}
@@ -795,12 +783,6 @@ do
     task.defer(function()
         Options.SummaryMetrics:SetValue(PhosphySummaryMetricDefaultSelected)
     end)
-    AddDivider(SummaryWebhookBox, "Leaderboards")
-    AddDropdown(SummaryWebhookBox, "SummaryLeaderboards", "Leaderboard Places", PhosphySummaryLeaderboardList, PhosphySummaryLeaderboardDefaultSelected, true)
-    task.defer(function()
-        Options.SummaryLeaderboards:SetValue(PhosphySummaryLeaderboardDefaultSelected)
-    end)
-    AddCheckbox(SummaryWebhookBox, "ToggleSummaryLeaderboards", "Include Leaderboard Places")
     AddDivider(SummaryWebhookBox, "Timer")
     AddSlider(SummaryWebhookBox, "WebhookSummaryMinutes", "Every", 1, 60, 10, "m")
     AddCheckbox(SummaryWebhookBox, "ToggleWebhookSummary", "Summary Webhook")
@@ -2439,10 +2421,9 @@ function PhosphyAddAutoTradeOffer(partnerName)
 
         if Toggles.ToggleAutoTradeTokens.Value then
             local tokens = tonumber(PlayerData.Data.Tokens) or 0
-            for _ = 1, tokens do
-                if not Toggles.ToggleAutoTradeTokens.Value then break end
-                TradeRemote:FireServer({ "AddTokens", 1, partnerName })
-                task.wait(0.1)
+            if tokens > 0 then
+                TradeRemote:FireServer({ "AddTokens", tokens, partnerName })
+                task.wait(0.2)
             end
         end
 
@@ -3210,98 +3191,6 @@ function PhosphyGetDisplayStat(primaryNames, fallbackNames)
     return "0"
 end
 
-PhosphySummaryLeaderboardAliases = {
-    ["Total Gems"] = { "TotalGems", "Gems", "Gem" },
-    ["Total Eggs"] = { "TotalEggs", "Eggs", "EggsHatched", "TotalEggsHatched" },
-    ["Total Clicks"] = { "TotalClicks", "Clicks", "Click" },
-    ["Total Rebirths"] = { "TotalRebirths", "Rebirths", "Rebirth" },
-    ["Time Played"] = { "TimePlayed", "Playtime", "PlayTime", "TotalTimePlayed" },
-    ["Robux"] = { "Robux", "RobuxSpent", "TotalRobux" },
-}
-
-function PhosphyFormatLeaderboardPlace(value)
-    if value == nil then return "N/A" end
-    local numeric = parseCompactNumber(value)
-    if numeric then return "#" .. fmtNum(numeric) end
-    return tostring(value)
-end
-
-function PhosphyReadLeaderboardPlace(label)
-    local data = PlayerData.Data or {}
-    local aliases = PhosphySummaryLeaderboardAliases[label] or { label }
-    local exactKeys = {}
-    local aliasKeys = {}
-    local placeKeys = { "Place", "Rank", "Position", "LeaderboardPlace", "LeaderboardRank" }
-
-    for _, alias in ipairs(aliases) do
-        aliasKeys[PhosphyNormalizeStatName(alias)] = true
-        for _, suffix in ipairs(placeKeys) do
-            exactKeys[PhosphyNormalizeStatName(alias .. suffix)] = true
-            exactKeys[PhosphyNormalizeStatName(suffix .. alias)] = true
-        end
-    end
-
-    local function readPlaceTable(tbl)
-        for _, key in ipairs(placeKeys) do
-            local value = tbl[key] or tbl[key:lower()] or tbl[key:upper()]
-            if type(value) == "number" or type(value) == "string" then
-                return value
-            end
-        end
-        return nil
-    end
-
-    local function scan(tbl, depth)
-        if type(tbl) ~= "table" or depth > 3 then return nil end
-
-        for key, value in pairs(tbl) do
-            local normalized = PhosphyNormalizeStatName(key)
-            if exactKeys[normalized] and (type(value) == "number" or type(value) == "string") then
-                return value
-            end
-
-            if aliasKeys[normalized] and type(value) == "table" then
-                local place = readPlaceTable(value)
-                if place ~= nil then return place end
-            end
-        end
-
-        for key, value in pairs(tbl) do
-            if type(value) == "table" then
-                local normalized = PhosphyNormalizeStatName(key)
-                if normalized:find("leaderboard", 1, true)
-                    or normalized:find("rank", 1, true)
-                    or normalized:find("place", 1, true)
-                    or normalized:find("top", 1, true)
-                then
-                    local found = scan(value, depth + 1)
-                    if found ~= nil then return found end
-                end
-            end
-        end
-
-        return nil
-    end
-
-    return PhosphyFormatLeaderboardPlace(scan(data, 0))
-end
-
-function PhosphyAddSummaryLeaderboardMetrics(entries)
-    if not (Toggles.ToggleSummaryLeaderboards and Toggles.ToggleSummaryLeaderboards.Value) then return end
-
-    local selected = Options.SummaryLeaderboards and Options.SummaryLeaderboards.Value
-    if type(selected) ~= "table" then return end
-
-    for _, leaderboardName in ipairs(PhosphySummaryLeaderboardList) do
-        if selected[leaderboardName] then
-            table.insert(entries, {
-                Name = leaderboardName .. " Place",
-                Value = PhosphyReadLeaderboardPlace(leaderboardName),
-            })
-        end
-    end
-end
-
 function PhosphyGetTotalTimePlayed()
     local data = PlayerData.Data or {}
     local candidates = {
@@ -3410,7 +3299,6 @@ function PhosphyBuildSummaryMetricEntries(totals, itemBreakdown)
         "EggsHatched",
     }, { "Eggs" }))
     PhosphyAddSummaryMetric(entries, "Total Time Played", PhosphyFmtDuration(PhosphyGetTotalTimePlayed()))
-    PhosphyAddSummaryLeaderboardMetrics(entries)
     return entries
 end
 
