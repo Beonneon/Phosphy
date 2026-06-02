@@ -721,7 +721,6 @@ do
     })
     AddCheckbox(AutoTradeBox, "ToggleAutoTradeTokens", "Add All Tokens")
     AddCheckbox(AutoTradeBox, "ToggleAutoTradeExclusiveEggs", "Add All Exclusive Eggs")
-    AddCheckbox(AutoTradeBox, "ToggleAutoTradeOnlyWithAssets", "Only Trade If Has Assets")
     AddCheckbox(AutoTradeBox, "ToggleAutoTrade", "Auto Send Trade Requests")
 
     local MiscBox = Tabs.Misc:AddRightGroupbox("Misc", "shield")
@@ -2457,10 +2456,6 @@ function PhosphyAddAutoTradeOffer(partnerName)
     end)
 end
 
-function PhosphyHasAutoTradeAssets()
-    return PhosphyGetTradeTokenAmount() > 0
-end
-
 function PhosphyInstallAutoTradeOfferListener()
     if autoTradeOfferConn then
         autoTradeOfferConn:Disconnect()
@@ -2506,14 +2501,9 @@ local function StartAutoTrade()
                 task.wait(3)
                 continue
             end
-            if Toggles.ToggleAutoTradeOnlyWithAssets.Value and not PhosphyHasAutoTradeAssets() then
-                task.wait(5)
-                continue
-            end
 
             for _, name in ipairs(usernames) do
                 if not Toggles.ToggleAutoTrade.Value then break end
-                if Toggles.ToggleAutoTradeOnlyWithAssets.Value and not PhosphyHasAutoTradeAssets() then break end
 
                 local target = Players:FindFirstChild(name)
                 if target and target ~= LocalPlayer then
