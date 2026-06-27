@@ -1323,6 +1323,227 @@ local PotionOptions = {
     { id = "elementalPotion", toggle = "TogglePotionElemental" },
 }
 
+local AutoUpgradeBoards = {
+    {
+        id = "Main",
+        name = "Main",
+        icon = "house",
+        entries = {
+            { label = "EXP Multiplier", key = "levelMultiplier" },
+            { label = "Slime Cooldown", key = "spawnRate" },
+            { label = "Slime Max Cap", key = "maxCap" },
+            { label = "Slime Tier", key = "slimeTier" },
+            { label = "Slime Value", key = "slimeValue" },
+        },
+    },
+    {
+        id = "Lvl5",
+        name = "Level 5",
+        icon = "sparkles",
+        entries = {
+            { label = "Slime Value (SP)", key = "slimeValue2" },
+            { label = "More Slimes", key = "moreSlimes" },
+            { label = "Collecting Area", key = "collectingRadius" },
+            { label = "Shiny Spawn Chance", key = "shinyChance" },
+            { label = "Player Movespeed", key = "playerMovespeed" },
+        },
+    },
+    {
+        id = "Lvl25",
+        name = "Level 25",
+        icon = "gem",
+        entries = {
+            { label = "Gem Spawn Chance", key = "gemSpawnChance" },
+            { label = "Holy Orb Cooldown", key = "holyBeamCooldown" },
+            { label = "Holy Orb Duration", key = "longerHolyBeam" },
+            { label = "Holy Orb", key = "holyBeam" },
+            { label = "Gem Value (SP)", key = "gemValue2" },
+            { label = "Gem Value", key = "gemValue" },
+            { label = "Gem Tier", key = "gemTier" },
+        },
+    },
+    {
+        id = "Lvl50",
+        name = "Level 50",
+        icon = "zap",
+        entries = {
+            { label = "Beam Cooldown", key = "beamCooldown" },
+            { label = "More Slimes", key = "moreSlimes2" },
+            { label = "Beam Size", key = "beamSize" },
+            { label = "Beam", key = "beam" },
+            { label = "Shiny Multiplier", key = "shinyMultiplier" },
+        },
+    },
+    {
+        id = "Lvl75",
+        name = "Level 75",
+        icon = "bot",
+        entries = {
+            { label = "Cleanbot Size", key = "roombaSize" },
+            { label = "Cleanbot Speed", key = "roombaSpeed" },
+            { label = "Cleanbot", key = "roomba" },
+        },
+    },
+    {
+        id = "Tier15",
+        name = "Tier 15",
+        icon = "crown",
+        entries = {
+            { label = "Slime Tier", key = "slimeTier2" },
+            { label = "Shiny Spawn Chance", key = "shinyChance2" },
+            { label = "Titanic Slime Chance", key = "titanicSlimeChance" },
+            { label = "Auto Holy Orb", key = "autoHolyBeam" },
+            { label = "Giant Slime Chance", key = "giantSlimeChance" },
+            { label = "EXP Multiplier", key = "levelMultiplier2" },
+        },
+    },
+    {
+        id = "Lvl150",
+        name = "Level 150",
+        icon = "bug",
+        entries = {
+            { label = "Glitch Chance", key = "corruptChance" },
+            { label = "EXP Multiplier", key = "levelMultiplier3" },
+            { label = "Glitch Power", key = "corruptPower" },
+            { label = "More Slimes", key = "moreSlimes3" },
+            { label = "Corrupted Slime Max Cap", key = "corruptedSlimeMaxCap" },
+            { label = "Corrupted Slime Cooldown", key = "corruptedSlimeCooldown" },
+            { label = "Corrupted Slime Value", key = "corruptedSlimeValue" },
+        },
+    },
+    {
+        id = "Lvl200",
+        name = "Level 200",
+        icon = "circle-dot",
+        entries = {
+            { label = "Void Orb", key = "void" },
+            { label = "Void Multiplier", key = "voidMultiplier" },
+            { label = "Void Orb Cooldown", key = "voidCooldown" },
+            { label = "Void Orb Duration", key = "voidDuration" },
+        },
+    },
+    {
+        id = "Lvl250",
+        name = "Level 250",
+        icon = "star",
+        entries = {
+            { label = "Auto Void Orb", key = "autoVoid" },
+            { label = "Lucky Rush", key = "luckyRush" },
+            { label = "Lucky Rush Power", key = "luckyRushPower" },
+            { label = "Lucky Rush Cooldown", key = "luckyRushCooldown" },
+        },
+    },
+    {
+        id = "Lvl350",
+        name = "Level 350",
+        icon = "sparkles",
+        entries = {
+            { label = "Godly Slime Chance", key = "godlySlimeChance" },
+        },
+    },
+    {
+        id = "Lvl400",
+        name = "Level 400",
+        icon = "meteor",
+        entries = {
+            { label = "Stardust Multiplier", key = "stardustMultiplier" },
+            { label = "Falling Stars Luck", key = "fallingStarsLuck" },
+            { label = "Stardust Machine Cooldown", key = "stardustMachineCooldown" },
+            { label = "More Falling Stars", key = "moreFallingStars" },
+        },
+    },
+}
+
+local function upgradeSelectionId(board)
+    return "UpgradeSelect" .. board.id
+end
+
+local function upgradeToggleId(board)
+    return "ToggleAutoUpgrade" .. board.id
+end
+
+local function upgradeBoardLabels(board)
+    local labels = {}
+    for _, entry in ipairs(board.entries) do
+        labels[#labels + 1] = entry.label
+    end
+    return labels
+end
+
+local function multiSelectionContains(selection, label)
+    if typeof(selection) ~= "table" then
+        return false
+    end
+
+    if selection[label] == true then
+        return true
+    end
+
+    for _, value in pairs(selection) do
+        if value == label then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function purchaseUpgradeBoard(board)
+    local remote = getRemote("PurchaseUpgrade", 10)
+    local option = Options[upgradeSelectionId(board)]
+    if not remote or not option then
+        return 0
+    end
+
+    local fired = 0
+    for _, entry in ipairs(board.entries) do
+        if multiSelectionContains(option.Value, entry.label) then
+            remote:FireServer(entry.key, "Max")
+            fired += 1
+            task.wait(0.12)
+        end
+    end
+
+    Marker:SetAttribute("AutoUpgradeLastBoard", board.name)
+    Marker:SetAttribute("AutoUpgradeLastFireCount", fired)
+    Marker:SetAttribute("AutoUpgradeLastFireAt", Workspace:GetServerTimeNow())
+    return fired
+end
+
+local function anyAutoUpgradeEnabled()
+    for _, board in ipairs(AutoUpgradeBoards) do
+        local toggle = Toggles[upgradeToggleId(board)]
+        if toggle and toggle.Value then
+            return true
+        end
+    end
+    return false
+end
+
+local function startAutoUpgradeLoop()
+    stopTask("AutoUpgrades")
+
+    Tasks.AutoUpgrades = task.spawn(function()
+        while anyAutoUpgradeEnabled() do
+            for _, board in ipairs(AutoUpgradeBoards) do
+                local toggle = Toggles[upgradeToggleId(board)]
+                if toggle and toggle.Value then
+                    purchaseUpgradeBoard(board)
+                end
+            end
+            task.wait(0.5)
+        end
+    end)
+end
+
+local function refreshAutoUpgradeLoop()
+    if anyAutoUpgradeEnabled() then
+        startAutoUpgradeLoop()
+    else
+        stopTask("AutoUpgrades")
+    end
+end
+
 local function fireAbilitiesOnce()
     local remotes = getRemotes()
     if not remotes then
@@ -2106,8 +2327,66 @@ local Window = Library:CreateWindow({
 local Tabs = {
     Main = Window:AddTab("Main", "house"),
     Automation = Window:AddTab("Automation", "bot"),
+    AutoUpgrade = Window:AddTab("Auto Upgrade", "circle-arrow-up"),
     ["UI Settings"] = Window:AddTab("UI Settings", "folder-cog"),
 }
+
+local AutoUpgradeTabboxGroups = {
+    { title = "Early Boards", side = "Left", indexes = { 1, 2, 3 } },
+    { title = "Ability Boards", side = "Right", indexes = { 4, 5, 6 } },
+    { title = "Advanced Boards", side = "Left", indexes = { 7, 8, 9 } },
+    { title = "Endgame Boards", side = "Right", indexes = { 10, 11 } },
+}
+
+local function addAutoUpgradeBoardTab(tabbox, board)
+    local labels = upgradeBoardLabels(board)
+    local boardTab = tabbox:AddTab(board.name, board.icon)
+
+    boardTab:AddDropdown(upgradeSelectionId(board), {
+        Text = "Selected Upgrades",
+        Values = labels,
+        Multi = true,
+        AllowNull = true,
+        Default = table.clone(labels),
+    })
+    boardTab:AddButton({
+        Text = "Buy Selected Max",
+        Func = function()
+            task.spawn(function()
+                notify(board.name .. " upgrades fired: " .. tostring(purchaseUpgradeBoard(board)))
+            end)
+        end,
+    })
+    boardTab:AddButton({
+        Text = "Select All",
+        Func = function()
+            Options[upgradeSelectionId(board)]:SetValue(table.clone(labels))
+        end,
+    })
+    boardTab:AddButton({
+        Text = "Clear Selection",
+        Func = function()
+            Options[upgradeSelectionId(board)]:SetValue({})
+        end,
+    })
+    boardTab:AddCheckbox(upgradeToggleId(board), {
+        Text = "Auto Buy Selected",
+        Default = false,
+    })
+end
+
+for _, group in ipairs(AutoUpgradeTabboxGroups) do
+    local tabbox
+    if group.side == "Left" then
+        tabbox = Tabs.AutoUpgrade:AddLeftTabbox(group.title)
+    else
+        tabbox = Tabs.AutoUpgrade:AddRightTabbox(group.title)
+    end
+
+    for _, index in ipairs(group.indexes) do
+        addAutoUpgradeBoardTab(tabbox, AutoUpgradeBoards[index])
+    end
+end
 
 local CollectorBox = Tabs.Main:AddLeftGroupbox("Collector", "magnet")
 CollectorBox:AddCheckbox("ToggleHugeCollector", {
@@ -2427,6 +2706,10 @@ InfoBox:AddButton({
     end,
 })
 
+for _, board in ipairs(AutoUpgradeBoards) do
+    Toggles[upgradeToggleId(board)]:OnChanged(refreshAutoUpgradeLoop)
+end
+
 Toggles.ToggleHugeCollector:OnChanged(function(state)
     if state then
         startCollector()
@@ -2651,6 +2934,9 @@ if Toggles.ToggleAutoCleanbotRoll.Value then
 end
 if Toggles.TogglePlayerSpeed.Value then
     startPlayerSpeed()
+end
+if anyAutoUpgradeEnabled() then
+    startAutoUpgradeLoop()
 end
 
 notify("slimeinc loaded.")
