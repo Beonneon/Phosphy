@@ -55,6 +55,7 @@ local Session = "phosphy-slime-" .. tostring(os.clock())
 local Tasks = {}
 local Connections = {}
 local LastSentAt = {}
+local TotemIds = {}
 local SpeedHumanoid = nil
 local OriginalWalkSpeed = nil
 
@@ -104,6 +105,14 @@ local function getRemotes()
         remotes = ReplicatedStorage:WaitForChild("Remotes", 10)
     end
     return remotes
+end
+
+local function getRemote(name, waitSeconds)
+    local remotes = getRemotes()
+    if not remotes then
+        return nil
+    end
+    return remotes:FindFirstChild(name) or remotes:WaitForChild(name, waitSeconds or 10)
 end
 
 local function getCollectSlimesRemote()
@@ -1022,6 +1031,215 @@ local function startAutoPotionsLoop()
     end)
 end
 
+local function updateTotemMarker()
+    local count = 0
+    local firstId = ""
+    for id in pairs(TotemIds) do
+        count += 1
+        if firstId == "" then
+            firstId = id
+        end
+    end
+
+    Marker:SetAttribute("KnownTotemCount", count)
+    Marker:SetAttribute("FirstKnownTotemId", firstId)
+end
+
+local function rememberTotemId(id)
+    if typeof(id) ~= "string" and typeof(id) ~= "number" then
+        return false
+    end
+
+    id = tostring(id)
+    if id == "" then
+        return false
+    end
+
+    TotemIds[id] = true
+    updateTotemMarker()
+    return true
+end
+
+local function requestTotemSchedule()
+    local remote = getRemote("RequestTotemSchedule", 10)
+    if not remote then
+        notify("RequestTotemSchedule remote was not found.")
+        return false
+    end
+
+    remote:FireServer()
+    Marker:SetAttribute("TotemScheduleRequestedAt", Workspace:GetServerTimeNow())
+    return true
+end
+
+local function claimTotemId(id, inside)
+    local remote = getRemote("TotemContactChanged", 10)
+    if not remote then
+        notify("TotemContactChanged remote was not found.")
+        return false
+    end
+
+    if not rememberTotemId(id) then
+        return false
+    end
+
+    remote:FireServer(tostring(id), inside ~= false)
+    Marker:SetAttribute("TotemLastClaimId", tostring(id))
+    Marker:SetAttribute("TotemLastClaimAt", Workspace:GetServerTimeNow())
+    return true
+end
+
+local function claimKnownTotems()
+    local claimed = 0
+    for id in pairs(TotemIds) do
+        if claimTotemId(id, true) then
+            claimed += 1
+            task.wait(0.05)
+        end
+    end
+
+    Marker:SetAttribute("TotemLastClaimCount", claimed)
+    return claimed
+end
+
+local function connectTotemEvents()
+    local spawned = getRemote("TotemSpawned", 10)
+    if spawned and not Connections.TotemSpawned then
+        Connections.TotemSpawned = spawned.OnClientEvent:Connect(function(id)
+            if rememberTotemId(id) and Toggles.ToggleAutoTotemContact and Toggles.ToggleAutoTotemContact.Value then
+                task.defer(claimTotemId, id, true)
+            end
+        end)
+    end
+
+    local scheduled = getRemote("TotemSpawnScheduled", 10)
+    if scheduled and not Connections.TotemSpawnScheduled then
+        Connections.TotemSpawnScheduled = scheduled.OnClientEvent:Connect(function(spawnAt, scheduledTotems)
+            if typeof(scheduledTotems) ~= "table" then
+                return
+            end
+
+            local delaySeconds = 0
+            if typeof(spawnAt) == "number" then
+                delaySeconds = math.max(0, spawnAt - Workspace:GetServerTimeNow()) + 0.25
+            end
+
+            for _, totem in pairs(scheduledTotems) do
+                if typeof(totem) == "table" and rememberTotemId(totem.id) then
+                    local id = tostring(totem.id)
+                    task.delay(delaySeconds, function()
+                        if Toggles.ToggleAutoTotemContact and Toggles.ToggleAutoTotemContact.Value then
+                            claimTotemId(id, true)
+                        end
+                    end)
+                end
+            end
+        end)
+    end
+
+    local cleared = getRemote("TotemCleared", 10)
+    if cleared and not Connections.TotemCleared then
+        Connections.TotemCleared = cleared.OnClientEvent:Connect(function(id)
+            if typeof(id) == "string" or typeof(id) == "number" then
+                TotemIds[tostring(id)] = nil
+                updateTotemMarker()
+            end
+        end)
+    end
+end
+
+local function startAutoTotemContact()
+    stopTask("AutoTotemContact")
+    connectTotemEvents()
+    requestTotemSchedule()
+
+    Tasks.AutoTotemContact = task.spawn(function()
+        while Toggles.ToggleAutoTotemContact and Toggles.ToggleAutoTotemContact.Value do
+            requestTotemSchedule()
+            claimKnownTotems()
+            task.wait(math.max(5, getNumberOption("TotemContactIntervalSeconds", 10)))
+        end
+    end)
+end
+
+local function isWantedAmulet(amuletType)
+    if amuletType == "GiftAmulet" then
+        return Toggles.TogglePickGiftAmulet and Toggles.TogglePickGiftAmulet.Value
+    end
+
+    if amuletType == "SummonerAmulet" then
+        return Toggles.TogglePickSummonerAmulet and Toggles.TogglePickSummonerAmulet.Value
+    end
+
+    return false
+end
+
+local function findWantedAmulet(options)
+    if typeof(options) ~= "table" then
+        return nil
+    end
+
+    for _, option in pairs(options) do
+        if typeof(option) == "table" and isWantedAmulet(option.amuletType) then
+            return option.amuletType
+        end
+    end
+
+    return nil
+end
+
+local function connectAutoAmuletPick()
+    if Connections.AutoAmuletRoll then
+        return true
+    end
+
+    local rollResult = getRemote("AmuletRollResult", 10)
+    local pickRemote = getRemote("PickAmulet", 10)
+    if not rollResult or not pickRemote then
+        notify("Amulet roll/pick remotes were not found.")
+        return false
+    end
+
+    Connections.AutoAmuletRoll = rollResult.OnClientEvent:Connect(function(options, rollId)
+        if not (Toggles.ToggleAutoPickSpecialAmulets and Toggles.ToggleAutoPickSpecialAmulets.Value) then
+            return
+        end
+
+        if typeof(rollId) ~= "number" then
+            return
+        end
+
+        local wanted = findWantedAmulet(options)
+        if not wanted then
+            return
+        end
+
+        task.delay(0.15, function()
+            if Toggles.ToggleAutoPickSpecialAmulets and Toggles.ToggleAutoPickSpecialAmulets.Value then
+                pickRemote:FireServer("NEW", rollId)
+                Marker:SetAttribute("AutoPickedAmulet", wanted)
+                Marker:SetAttribute("AutoPickedAmuletAt", Workspace:GetServerTimeNow())
+            end
+        end)
+    end)
+
+    return true
+end
+
+local function rollAmuletOnce()
+    connectAutoAmuletPick()
+
+    local remote = getRemote("RollAmulet", 10)
+    if not remote then
+        notify("RollAmulet remote was not found.")
+        return false
+    end
+
+    remote:FireServer()
+    Marker:SetAttribute("AmuletRolledAt", Workspace:GetServerTimeNow())
+    return true
+end
+
 local function startCleanbotResultListener()
     if Connections.CleanbotResult then
         return true
@@ -1406,6 +1624,52 @@ PotionBox:AddCheckbox("TogglePotionElemental", {
     Default = false,
 })
 
+local TotemBox = Tabs.Main:AddRightGroupbox("Totem / Amulets", "badge-plus")
+TotemBox:AddSlider("TotemContactIntervalSeconds", {
+    Text = "Totem Check Interval",
+    Min = 5,
+    Max = 60,
+    Default = 10,
+    Rounding = 0,
+    Suffix = " s",
+})
+TotemBox:AddButton({
+    Text = "Request Totem Schedule",
+    Func = function()
+        connectTotemEvents()
+        notify("Totem schedule requested: " .. tostring(requestTotemSchedule()))
+    end,
+})
+TotemBox:AddButton({
+    Text = "Claim Known Totems",
+    Func = function()
+        connectTotemEvents()
+        notify("Known totems claimed: " .. tostring(claimKnownTotems()))
+    end,
+})
+TotemBox:AddCheckbox("ToggleAutoTotemContact", {
+    Text = "Auto Totem Contact",
+    Default = false,
+})
+TotemBox:AddButton({
+    Text = "Roll Amulet Once",
+    Func = function()
+        notify("Amulet roll fired: " .. tostring(rollAmuletOnce()))
+    end,
+})
+TotemBox:AddCheckbox("ToggleAutoPickSpecialAmulets", {
+    Text = "Auto Pick Special",
+    Default = false,
+})
+TotemBox:AddCheckbox("TogglePickGiftAmulet", {
+    Text = "Pick Gift Amulet",
+    Default = true,
+})
+TotemBox:AddCheckbox("TogglePickSummonerAmulet", {
+    Text = "Pick Summoner Amulet",
+    Default = true,
+})
+
 local DropBoostBox = Tabs.Main:AddRightGroupbox("Plinko / Crates", "gift")
 DropBoostBox:AddSlider("Plinko4xFireCount", {
     Text = "Plinko 4x Fires",
@@ -1663,6 +1927,18 @@ Toggles.ToggleAutoPotions:OnChanged(function(state)
         stopTask("AutoPotions")
     end
 end)
+Toggles.ToggleAutoTotemContact:OnChanged(function(state)
+    if state then
+        startAutoTotemContact()
+    else
+        stopTask("AutoTotemContact")
+    end
+end)
+Toggles.ToggleAutoPickSpecialAmulets:OnChanged(function(state)
+    if state then
+        connectAutoAmuletPick()
+    end
+end)
 Toggles.ToggleAutoGodlyOrb:OnChanged(function(state)
     if state then
         startGodlyOrbLoop()
@@ -1798,6 +2074,12 @@ if Toggles.ToggleAutoAbilities.Value then
 end
 if Toggles.ToggleAutoPotions.Value then
     startAutoPotionsLoop()
+end
+if Toggles.ToggleAutoTotemContact.Value then
+    startAutoTotemContact()
+end
+if Toggles.ToggleAutoPickSpecialAmulets.Value then
+    connectAutoAmuletPick()
 end
 if Toggles.ToggleAutoPlinko.Value then
     startAutoPlinkoLoop()
