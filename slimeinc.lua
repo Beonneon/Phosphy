@@ -107,12 +107,28 @@ local function getGodlyOrbCollectedRemote()
     return remotes:FindFirstChild("GodlyOrbCollected") or remotes:WaitForChild("GodlyOrbCollected", 10)
 end
 
-local function getProfileUpdatedRemote()
+local function getGemBobAbilityRequestedRemote()
     local remotes = getRemotes()
     if not remotes then
         return nil
     end
-    return remotes:FindFirstChild("ProfileUpdated") or remotes:WaitForChild("ProfileUpdated", 10)
+    return remotes:FindFirstChild("GemBobAbilityRequested") or remotes:WaitForChild("GemBobAbilityRequested", 10)
+end
+
+local function getGemBobGemBatchRemote()
+    local remotes = getRemotes()
+    if not remotes then
+        return nil
+    end
+    return remotes:FindFirstChild("GemBobGemBatch") or remotes:WaitForChild("GemBobGemBatch", 10)
+end
+
+local function getCollectGemBobGemsRemote()
+    local remotes = getRemotes()
+    if not remotes then
+        return nil
+    end
+    return remotes:FindFirstChild("CollectGemBobGems") or remotes:WaitForChild("CollectGemBobGems", 10)
 end
 
 local function getSlimesFolder()
@@ -181,7 +197,7 @@ local function getNumberOption(id, fallback)
 end
 
 local function getRadius()
-    return math.max(1, getNumberOption("CollectorRadius", 500))
+    return math.max(1, getNumberOption("CollectorRadius", 5000))
 end
 
 local function getBatchSize()
@@ -225,7 +241,7 @@ local function resizeActualCollectorRing()
         return
     end
 
-    local ringSize = math.max(2, getRadius() / 2)
+    local ringSize = math.max(2, getRadius())
     particle.Size = NumberSequence.new(ringSize)
 end
 
@@ -442,121 +458,81 @@ local function fireGodlyOrbClaim(count, delaySeconds)
     return count
 end
 
-local function getClientController(name)
-    local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts")
-    local client = playerScripts and playerScripts:FindFirstChild("Client")
-    local controllers = client and client:FindFirstChild("Controllers")
-    local module = controllers and controllers:FindFirstChild(name)
-
-    if not module or not module:IsA("ModuleScript") then
-        return nil
-    end
-
-    local ok, result = pcall(require, module)
-    if ok then
-        return result
-    end
-
-    return nil
-end
-
-local function formatMultiplier(value)
-    local rounded = math.floor(value * 10 + 0.5) / 10
-    if rounded % 1 == 0 then
-        return tostring(math.floor(rounded))
-    end
-    return string.format("%.1f", rounded)
-end
-
-local function setTextByPath(root, path, text)
-    local current = root
-    for _, name in ipairs(path) do
-        current = current and current:FindFirstChild(name)
-        if not current then
-            return false
-        end
-    end
-
-    if current:IsA("TextLabel") or current:IsA("TextButton") then
-        current.Text = text
-        return true
-    end
-
-    return false
-end
-
-local function patchFriendBoostUi(friendCount)
-    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    if not playerGui then
+local function fireGemStorm()
+    local remote = getGemBobAbilityRequestedRemote()
+    if not remote then
+        notify("GemBobAbilityRequested remote was not found.")
         return false
     end
 
-    local frame = playerGui:FindFirstChild("FriendsBoost", true)
-    if not frame then
-        return false
-    end
-
-    local multiplier = 1 + friendCount * 0.1
-    frame.Visible = friendCount > 0
-    setTextByPath(frame, { "Main", "Stack" }, "x" .. tostring(friendCount))
-    setTextByPath(frame, { "Main", "Hover", "Slimes" }, "x" .. formatMultiplier(multiplier) .. " Slimes Value")
-    setTextByPath(frame, { "Main", "Hover", "Exp" }, "x" .. formatMultiplier(multiplier) .. " Exp")
+    remote:FireServer()
+    Marker:SetAttribute("GemStormLastRequest", Workspace:GetServerTimeNow())
     return true
 end
 
-local function fireLocalProfileUpdated(field, value)
-    if typeof(getconnections) ~= "function" then
+local function claimGemIds(ids)
+    local remote = getCollectGemBobGemsRemote()
+    if not remote or #ids == 0 then
         return 0
     end
 
-    local remote = getProfileUpdatedRemote()
-    if not remote then
-        return 0
-    end
-
-    local ok, connections = pcall(getconnections, remote.OnClientEvent)
-    if not ok or typeof(connections) ~= "table" then
-        return 0
-    end
-
-    local fired = 0
-    for _, connection in ipairs(connections) do
-        local fn = connection.Function
-        if typeof(fn) == "function" and pcall(fn, field, value) then
-            fired += 1
-        elseif typeof(connection.Fire) == "function" and pcall(function()
-            connection:Fire(field, value)
-        end) then
-            fired += 1
+    local claimed = 0
+    local batchLimit = 50
+    for first = 1, #ids, batchLimit do
+        local batch = {}
+        for index = first, math.min(first + batchLimit - 1, #ids) do
+            batch[#batch + 1] = ids[index]
         end
+
+        remote:FireServer(batch)
+        claimed += #batch
+        task.wait(0.05)
     end
 
-    return fired
+    Marker:SetAttribute("GemIdsLastClaimed", claimed)
+    Marker:SetAttribute("GemClaimLastFire", Workspace:GetServerTimeNow())
+    return claimed
 end
 
-local function setMaxFriendBoost(friendCount)
-    friendCount = math.max(0, math.floor(tonumber(friendCount) or 10))
+local function scheduleGemBatchClaims(gems)
+    if typeof(gems) ~= "table" then
+        return
+    end
 
-    local signaled = fireLocalProfileUpdated("friends", friendCount)
-    local profilePatched = signaled > 0
-
-    if not profilePatched then
-        local dataController = getClientController("DataController")
-        if typeof(dataController) == "table" and typeof(dataController.get) == "function" then
-            local ok, profile = pcall(dataController.get)
-            if ok and typeof(profile) == "table" then
-                profile.friends = friendCount
-                profilePatched = true
-            end
+    local pending = {}
+    for _, gem in pairs(gems) do
+        if typeof(gem) == "table" and typeof(gem.id) == "string" then
+            pending[#pending + 1] = {
+                id = gem.id,
+                spawnAt = typeof(gem.spawnAt) == "number" and gem.spawnAt or Workspace:GetServerTimeNow(),
+            }
         end
     end
 
-    local uiPatched = patchFriendBoostUi(friendCount)
-    Marker:SetAttribute("FriendBoostCount", friendCount)
-    Marker:SetAttribute("FriendBoostProfilePatched", profilePatched)
-    Marker:SetAttribute("FriendBoostUiPatched", uiPatched)
+    table.sort(pending, function(left, right)
+        return left.spawnAt < right.spawnAt
+    end)
 
-    return profilePatched, uiPatched
+    task.spawn(function()
+        local index = 1
+        while index <= #pending and Toggles.ToggleAutoCollectGemStorm and Toggles.ToggleAutoCollectGemStorm.Value do
+            local waitSeconds = pending[index].spawnAt - Workspace:GetServerTimeNow()
+            if waitSeconds > 0 then
+                task.wait(waitSeconds)
+            end
+
+            local ready = {}
+            local now = Workspace:GetServerTimeNow() + 0.1
+            while index <= #pending and pending[index].spawnAt <= now do
+                ready[#ready + 1] = pending[index].id
+                index += 1
+            end
+
+            if #ready > 0 then
+                claimGemIds(ready)
+            end
+        end
+    end)
 end
 
 local function startBeamBoostLoop()
@@ -589,23 +565,54 @@ local function startGodlyOrbLoop()
     end)
 end
 
-local function startFriendBoostLoop()
-    stopTask("FriendBoost")
-    disconnect("FriendBoostVisual")
+local function startAutoPlinkoLoop()
+    stopTask("AutoPlinko")
 
-    Connections.FriendBoostVisual = RunService.Heartbeat:Connect(function()
-        if not (Toggles.ToggleAutoFriendBoost and Toggles.ToggleAutoFriendBoost.Value) then
-            disconnect("FriendBoostVisual")
-            return
+    Tasks.AutoPlinko = task.spawn(function()
+        while Toggles.ToggleAutoPlinko and Toggles.ToggleAutoPlinko.Value do
+            firePlinko4x(
+                getNumberOption("Plinko4xFireCount", 1),
+                getNumberOption("DropBoostDelayMs", 150) / 1000
+            )
+            task.wait(math.max(1, getNumberOption("AutoDropBoostIntervalSeconds", 30)))
         end
-
-        patchFriendBoostUi(math.max(0, math.floor(getNumberOption("FriendBoostCount", 10))))
     end)
+end
 
-    Tasks.FriendBoost = task.spawn(function()
-        while Toggles.ToggleAutoFriendBoost and Toggles.ToggleAutoFriendBoost.Value do
-            setMaxFriendBoost(getNumberOption("FriendBoostCount", 10))
-            task.wait(math.max(1, getNumberOption("FriendBoostRefreshSeconds", 5)))
+local function startAutoCrateLoop()
+    stopTask("AutoCrate")
+
+    Tasks.AutoCrate = task.spawn(function()
+        while Toggles.ToggleAutoCrate and Toggles.ToggleAutoCrate.Value do
+            fireCrateBoost("goldenCrate", 1, 0)
+            task.wait(math.max(1, getNumberOption("AutoDropBoostIntervalSeconds", 30)))
+        end
+    end)
+end
+
+local function startGemStormLoop()
+    stopTask("GemStorm")
+
+    Tasks.GemStorm = task.spawn(function()
+        while Toggles.ToggleAutoGemStorm and Toggles.ToggleAutoGemStorm.Value do
+            fireGemStorm()
+            task.wait(math.max(1, getNumberOption("GemStormRetrySeconds", 5)))
+        end
+    end)
+end
+
+local function startGemAutoCollect()
+    disconnect("GemBatch")
+
+    local remote = getGemBobGemBatchRemote()
+    if not remote then
+        notify("GemBobGemBatch remote was not found.")
+        return
+    end
+
+    Connections.GemBatch = remote.OnClientEvent:Connect(function(gems)
+        if Toggles.ToggleAutoCollectGemStorm and Toggles.ToggleAutoCollectGemStorm.Value then
+            scheduleGemBatchClaims(gems)
         end
     end)
 end
@@ -689,8 +696,8 @@ CollectorBox:AddCheckbox("ToggleCollectAll", {
 CollectorBox:AddSlider("CollectorRadius", {
     Text = "Circle Radius",
     Min = 25,
-    Max = 1000,
-    Default = 500,
+    Max = 10000,
+    Default = 5000,
     Rounding = 0,
     Suffix = " studs",
 })
@@ -727,7 +734,7 @@ CollectorBox:AddButton({
 CollectorBox:AddButton({
     Text = "Really Big Preset",
     Func = function()
-        Options.CollectorRadius:SetValue(1000)
+        Options.CollectorRadius:SetValue(10000)
         Options.CollectorBatchSize:SetValue(1000)
         Options.CollectorTickMs:SetValue(25)
         resizeActualCollectorRing()
@@ -795,6 +802,14 @@ DropBoostBox:AddSlider("DropBoostDelayMs", {
     Rounding = 0,
     Suffix = " ms",
 })
+DropBoostBox:AddSlider("AutoDropBoostIntervalSeconds", {
+    Text = "Auto Interval",
+    Min = 1,
+    Max = 300,
+    Default = 30,
+    Rounding = 0,
+    Suffix = " s",
+})
 DropBoostBox:AddButton({
     Text = "Get Plinko 4x",
     Func = function()
@@ -807,27 +822,26 @@ DropBoostBox:AddButton({
         end)
     end,
 })
-DropBoostBox:AddButton({
-    Text = "Crate Boost",
-    Func = function()
-        task.spawn(function()
-            local fired = fireCrateBoost("crate", 1, getNumberOption("DropBoostDelayMs", 150) / 1000)
-            notify("Crate boost fired: " .. tostring(fired))
-        end)
-    end,
+DropBoostBox:AddCheckbox("ToggleAutoPlinko", {
+    Text = "Auto Plinko 4x",
+    Default = false,
 })
 DropBoostBox:AddButton({
-    Text = "Golden Crate Boost",
+    Text = "Get Crate Boost",
     Func = function()
         task.spawn(function()
             local fired = fireCrateBoost("goldenCrate", 1, getNumberOption("DropBoostDelayMs", 150) / 1000)
-            notify("Golden crate boost fired: " .. tostring(fired))
+            notify("Golden-first crate boost fired: " .. tostring(fired))
         end)
     end,
 })
+DropBoostBox:AddCheckbox("ToggleAutoCrate", {
+    Text = "Auto Crate Boost",
+    Default = false,
+})
 
-local OrbFriendBox = Tabs.Main:AddLeftGroupbox("Orb / Friends", "sparkles")
-OrbFriendBox:AddSlider("GodlyOrbClaimDelayMs", {
+local OrbBox = Tabs.Main:AddLeftGroupbox("Godly Orb", "sparkles")
+OrbBox:AddSlider("GodlyOrbClaimDelayMs", {
     Text = "Orb Claim Delay",
     Min = 250,
     Max = 10000,
@@ -835,7 +849,7 @@ OrbFriendBox:AddSlider("GodlyOrbClaimDelayMs", {
     Rounding = 0,
     Suffix = " ms",
 })
-OrbFriendBox:AddButton({
+OrbBox:AddButton({
     Text = "Claim Godly Orb",
     Func = function()
         task.spawn(function()
@@ -843,35 +857,32 @@ OrbFriendBox:AddButton({
         end)
     end,
 })
-OrbFriendBox:AddCheckbox("ToggleAutoGodlyOrb", {
+OrbBox:AddCheckbox("ToggleAutoGodlyOrb", {
     Text = "Auto Claim Godly Orb",
     Default = true,
 })
-OrbFriendBox:AddSlider("FriendBoostCount", {
-    Text = "Friend Boost Count",
-    Min = 0,
-    Max = 100,
-    Default = 10,
-    Rounding = 0,
-    Suffix = " friends",
-})
-OrbFriendBox:AddSlider("FriendBoostRefreshSeconds", {
-    Text = "Friend Refresh",
+
+local GemStormBox = Tabs.Main:AddLeftGroupbox("Gem Storm", "gem")
+GemStormBox:AddSlider("GemStormRetrySeconds", {
+    Text = "Request Interval",
     Min = 1,
     Max = 60,
     Default = 5,
     Rounding = 0,
     Suffix = " s",
 })
-OrbFriendBox:AddButton({
-    Text = "Max Friend Boost",
+GemStormBox:AddButton({
+    Text = "Start Gem Storm",
     Func = function()
-        local profilePatched, uiPatched = setMaxFriendBoost(getNumberOption("FriendBoostCount", 10))
-        notify("Friend boost set. Profile: " .. tostring(profilePatched) .. " UI: " .. tostring(uiPatched))
+        notify("Gem Storm requested: " .. tostring(fireGemStorm()))
     end,
 })
-OrbFriendBox:AddCheckbox("ToggleAutoFriendBoost", {
-    Text = "Auto Keep Friend Boost",
+GemStormBox:AddCheckbox("ToggleAutoGemStorm", {
+    Text = "Auto Gem Storm",
+    Default = false,
+})
+GemStormBox:AddCheckbox("ToggleAutoCollectGemStorm", {
+    Text = "Auto Collect Gems",
     Default = true,
 })
 
@@ -925,12 +936,32 @@ Toggles.ToggleAutoGodlyOrb:OnChanged(function(state)
         stopTask("GodlyOrb")
     end
 end)
-Toggles.ToggleAutoFriendBoost:OnChanged(function(state)
+Toggles.ToggleAutoPlinko:OnChanged(function(state)
     if state then
-        startFriendBoostLoop()
+        startAutoPlinkoLoop()
     else
-        stopTask("FriendBoost")
-        disconnect("FriendBoostVisual")
+        stopTask("AutoPlinko")
+    end
+end)
+Toggles.ToggleAutoCrate:OnChanged(function(state)
+    if state then
+        startAutoCrateLoop()
+    else
+        stopTask("AutoCrate")
+    end
+end)
+Toggles.ToggleAutoGemStorm:OnChanged(function(state)
+    if state then
+        startGemStormLoop()
+    else
+        stopTask("GemStorm")
+    end
+end)
+Toggles.ToggleAutoCollectGemStorm:OnChanged(function(state)
+    if state then
+        startGemAutoCollect()
+    else
+        disconnect("GemBatch")
     end
 end)
 Options.CollectorRadius:OnChanged(function()
@@ -940,11 +971,6 @@ end)
 Options.CollectorBatchSize:OnChanged(updateMarker)
 Options.CollectorTickMs:OnChanged(updateMarker)
 Options.CollectorRetryMs:OnChanged(updateMarker)
-Options.FriendBoostCount:OnChanged(function()
-    if Toggles.ToggleAutoFriendBoost and Toggles.ToggleAutoFriendBoost.Value then
-        setMaxFriendBoost(getNumberOption("FriendBoostCount", 10))
-    end
-end)
 
 Library:OnUnload(function()
     Marker:SetAttribute("Session", "unloaded-" .. tostring(os.clock()))
@@ -996,6 +1022,10 @@ SaveManager:SetSubFolder("Collector")
 SaveManager:BuildConfigSection(Tabs["UI Settings"])
 SaveManager:LoadAutoloadConfig()
 
+if Options.CollectorRadius.Value < 5000 then
+    Options.CollectorRadius:SetValue(5000)
+end
+
 startRingVisual()
 if Toggles.ToggleHugeCollector.Value then
     startCollector()
@@ -1003,8 +1033,17 @@ end
 if Toggles.ToggleAutoGodlyOrb.Value then
     startGodlyOrbLoop()
 end
-if Toggles.ToggleAutoFriendBoost.Value then
-    startFriendBoostLoop()
+if Toggles.ToggleAutoPlinko.Value then
+    startAutoPlinkoLoop()
+end
+if Toggles.ToggleAutoCrate.Value then
+    startAutoCrateLoop()
+end
+if Toggles.ToggleAutoGemStorm.Value then
+    startGemStormLoop()
+end
+if Toggles.ToggleAutoCollectGemStorm.Value then
+    startGemAutoCollect()
 end
 
 notify("slimeinc loaded.")
