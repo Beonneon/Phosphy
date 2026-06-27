@@ -719,13 +719,7 @@ local function fireEmpoweredBoostStack(count, delaySeconds)
 end
 
 local function maxEmpoweredBoost()
-    local current = tonumber(LocalPlayer:GetAttribute("EmpoweredStack")) or 0
-    local missing = math.max(0, 10 - math.floor(current))
-    if missing == 0 then
-        return 0
-    end
-
-    return fireEmpoweredBoostStack(missing, 0.08)
+    return fireEmpoweredBoostStack(10, 0.1)
 end
 
 local function getPlinkoMachine()
@@ -967,16 +961,16 @@ local function collectFallingStarPart(part)
     return true
 end
 
-local function collectFallingStarPosition(position)
+local function collectFallingStarPosition(position, holdSeconds)
     local root = getRoot()
     if not (root and typeof(position) == "Vector3") then
         return false
     end
 
-    local holdSeconds = 0.25
-    setFallingStarMovementTarget(position, holdSeconds + 0.15)
+    holdSeconds = math.max(0.4, tonumber(holdSeconds) or 0.4)
+    setFallingStarMovementTarget(position, holdSeconds)
     root.CFrame = CFrame.new(position + Vector3.new(0, 3, 0))
-    task.wait(holdSeconds)
+    task.wait(math.min(0.25, holdSeconds))
 
     return true
 end
@@ -985,8 +979,14 @@ local function collectFallingStars(position)
     local maxStars = 8
     local collected = 0
 
-    if position and collectFallingStarPosition(position) then
-        collected += 1
+    if position and collectFallingStarPosition(position, 3) then
+        Marker:SetAttribute("FallingStarLastCollectCount", 1)
+        Marker:SetAttribute("FallingStarLastCollectAt", Workspace:GetServerTimeNow())
+        return 1
+    end
+
+    if FallingStarMovePosition and os.clock() <= FallingStarMoveUntil then
+        return 0
     end
 
     for _, part in ipairs(findFallingStarParts()) do
@@ -1050,15 +1050,21 @@ local function startFallingStarListeners()
             end
 
             local args = { ... }
-            local position
-            for _, value in ipairs(args) do
-                position = payloadToPosition(value)
-                if position then
-                    break
+            local position = payloadToPosition(args[1])
+            if not position then
+                for _, value in ipairs(args) do
+                    position = payloadToPosition(value)
+                    if position then
+                        break
+                    end
                 end
             end
 
-            task.delay(1.5, function()
+            if position then
+                Marker:SetAttribute("FallingStarDropPosition", tostring(position))
+            end
+
+            task.delay(7.5, function()
                 if Toggles.ToggleAutoCollectFallingStars and Toggles.ToggleAutoCollectFallingStars.Value then
                     collectFallingStars(position)
                 end
@@ -1948,14 +1954,15 @@ local function startBeamBoostLoop()
     stopTask("BeamBoost")
 
     Tasks.BeamBoost = task.spawn(function()
+        local fired = maxEmpoweredBoost()
+        Marker:SetAttribute("BeamBoostLastTopUp", fired)
+
         while Toggles.ToggleAutoBeamBoost and Toggles.ToggleAutoBeamBoost.Value do
-            local fired = maxEmpoweredBoost()
-
-            if fired > 0 then
-                Marker:SetAttribute("BeamBoostLastTopUp", fired)
+            task.wait(29)
+            if Toggles.ToggleAutoBeamBoost and Toggles.ToggleAutoBeamBoost.Value then
+                fireEmpoweredBoostStack(1, 0)
+                Marker:SetAttribute("BeamBoostLastTopUp", 1)
             end
-
-            task.wait(0.5)
         end
     end)
 end
