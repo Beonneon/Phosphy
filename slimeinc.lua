@@ -655,7 +655,10 @@ local function unlockVault()
         return false
     end
 
-    remote:FireServer({ 4, 6, 2, 9 })
+    local args = {
+        { 4, 6, 2, 9 },
+    }
+    remote:FireServer(unpack(args))
     Marker:SetAttribute("VaultUnlockRequestedAt", Workspace:GetServerTimeNow())
     return true
 end
