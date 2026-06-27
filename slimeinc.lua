@@ -18,6 +18,8 @@ local Session = "phosphy-slime-" .. tostring(os.clock())
 local Tasks = {}
 local Connections = {}
 local LastSentAt = {}
+local SpeedHumanoid = nil
+local OriginalWalkSpeed = nil
 
 local Marker = Workspace:FindFirstChild("PhosphySlimeCollector")
 if not Marker then
@@ -167,6 +169,62 @@ local function getRoot()
     end
 
     return nil
+end
+
+local function getHumanoid()
+    local character = LocalPlayer.Character
+    if not character then
+        return nil
+    end
+
+    return character:FindFirstChildOfClass("Humanoid")
+end
+
+local function applyPlayerSpeed()
+    local humanoid = getHumanoid()
+    if not humanoid then
+        return false
+    end
+
+    if humanoid ~= SpeedHumanoid then
+        SpeedHumanoid = humanoid
+        OriginalWalkSpeed = humanoid.WalkSpeed
+    end
+
+    local speedOption = Options.PlayerSpeed
+    local speed = math.max(0, tonumber(speedOption and speedOption.Value) or 50)
+    if humanoid.WalkSpeed ~= speed then
+        humanoid.WalkSpeed = speed
+    end
+    Marker:SetAttribute("PlayerSpeed", speed)
+    return true
+end
+
+local function stopPlayerSpeed()
+    disconnect("PlayerSpeed")
+
+    if SpeedHumanoid and SpeedHumanoid.Parent and OriginalWalkSpeed then
+        SpeedHumanoid.WalkSpeed = OriginalWalkSpeed
+    end
+
+    SpeedHumanoid = nil
+    OriginalWalkSpeed = nil
+    Marker:SetAttribute("PlayerSpeedEnabled", false)
+end
+
+local function startPlayerSpeed()
+    disconnect("PlayerSpeed")
+    Marker:SetAttribute("PlayerSpeedEnabled", true)
+    applyPlayerSpeed()
+
+    Connections.PlayerSpeed = RunService.Heartbeat:Connect(function()
+        if not (Toggles.TogglePlayerSpeed and Toggles.TogglePlayerSpeed.Value) then
+            stopPlayerSpeed()
+            return
+        end
+
+        applyPlayerSpeed()
+    end)
 end
 
 local function getSlimePosition(slime)
@@ -1041,6 +1099,20 @@ CleanbotBox:AddCheckbox("ToggleAutoCleanbotRoll", {
     Default = true,
 })
 
+local PlayerBox = Tabs.Main:AddLeftGroupbox("Player", "person-standing")
+PlayerBox:AddSlider("PlayerSpeed", {
+    Text = "Walk Speed",
+    Min = 16,
+    Max = 250,
+    Default = 50,
+    Rounding = 0,
+    Suffix = " speed",
+})
+PlayerBox:AddCheckbox("TogglePlayerSpeed", {
+    Text = "Player Speed",
+    Default = false,
+})
+
 local InfoBox = Tabs.Main:AddRightGroupbox("Live Tuning", "sliders-horizontal")
 InfoBox:AddLabel({
     Text = "Workspace marker: PhosphySlimeCollector",
@@ -1133,6 +1205,13 @@ Toggles.ToggleAutoCleanbotRoll:OnChanged(function(state)
         stopTask("AutoCleanbot")
     end
 end)
+Toggles.TogglePlayerSpeed:OnChanged(function(state)
+    if state then
+        startPlayerSpeed()
+    else
+        stopPlayerSpeed()
+    end
+end)
 Options.CollectorRadius:OnChanged(function()
     updateMarker()
     resizeActualCollectorRing()
@@ -1140,10 +1219,16 @@ end)
 Options.CollectorBatchSize:OnChanged(updateMarker)
 Options.CollectorTickMs:OnChanged(updateMarker)
 Options.CollectorRetryMs:OnChanged(updateMarker)
+Options.PlayerSpeed:OnChanged(function()
+    if Toggles.TogglePlayerSpeed and Toggles.TogglePlayerSpeed.Value then
+        applyPlayerSpeed()
+    end
+end)
 
 Library:OnUnload(function()
     Marker:SetAttribute("Session", "unloaded-" .. tostring(os.clock()))
     Marker:SetAttribute("Enabled", false)
+    stopPlayerSpeed()
 
     for name in pairs(Tasks) do
         stopTask(name)
@@ -1219,6 +1304,9 @@ if Toggles.ToggleAutoCollectGemStorm.Value then
 end
 if Toggles.ToggleAutoCleanbotRoll.Value then
     startAutoCleanbotLoop()
+end
+if Toggles.TogglePlayerSpeed.Value then
+    startPlayerSpeed()
 end
 
 notify("slimeinc loaded.")
