@@ -63,7 +63,17 @@ local LatestAmuletSummary = "No amulet roll yet."
 local LatestAmuletTarget = nil
 local LatestAmuletTargetIndex = nil
 local AmuletRollPending = false
+local AmuletChoicePending = false
+local AmuletPickPending = false
 local AmuletStatusLabel = nil
+local DataController = nil
+local CleanbotRollPending = false
+local CleanbotRollSerial = 0
+local ReadyActionLastFiredAt = {}
+local PotionRequestedUntil = {}
+local ActiveBoosts = {}
+local BoostStateReady = false
+local BoostStateLastRequestedAt = 0
 
 local Marker = Workspace:FindFirstChild("PhosphySlimeCollector")
 if not Marker then
@@ -119,6 +129,125 @@ local function getRemote(name, waitSeconds)
         return nil
     end
     return remotes:FindFirstChild(name) or remotes:WaitForChild(name, waitSeconds or 10)
+end
+
+local function getProfileData()
+    if not DataController then
+        local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts")
+        local client = playerScripts and playerScripts:FindFirstChild("Client")
+        local controllers = client and client:FindFirstChild("Controllers")
+        local module = controllers and controllers:FindFirstChild("DataController")
+
+        if module and module:IsA("ModuleScript") then
+            local ok, controller = pcall(require, module)
+            if ok and typeof(controller) == "table" then
+                DataController = controller
+            end
+        end
+    end
+
+    if DataController and typeof(DataController.get) == "function" then
+        local ok, profile = pcall(DataController.get)
+        if ok and typeof(profile) == "table" then
+            return profile
+        end
+    end
+
+    return nil
+end
+
+local function applyBoostState(profileOrBoosts)
+    local boosts = profileOrBoosts
+    if typeof(profileOrBoosts) == "table" and typeof(profileOrBoosts.boosts) == "table" then
+        boosts = profileOrBoosts.boosts
+    end
+
+    if typeof(boosts) ~= "table" then
+        return false
+    end
+
+    ActiveBoosts = table.clone(boosts)
+    BoostStateReady = true
+    return true
+end
+
+local function ensureBoostState()
+    local remotes = getRemotes()
+    if not remotes then
+        return
+    end
+
+    local profileLoaded = remotes:FindFirstChild("ProfileLoaded")
+    if profileLoaded and not Connections.PotionProfileLoaded then
+        Connections.PotionProfileLoaded = profileLoaded.OnClientEvent:Connect(function(profile)
+            applyBoostState(profile)
+        end)
+    end
+
+    local profileUpdated = remotes:FindFirstChild("ProfileUpdated")
+    if profileUpdated and not Connections.PotionProfileUpdated then
+        Connections.PotionProfileUpdated = profileUpdated.OnClientEvent:Connect(function(field, value)
+            if field == "boosts" then
+                applyBoostState(value)
+            end
+        end)
+    end
+
+    local profileUpdatedBatch = remotes:FindFirstChild("ProfileUpdatedBatch")
+    if profileUpdatedBatch and not Connections.PotionProfileUpdatedBatch then
+        Connections.PotionProfileUpdatedBatch = profileUpdatedBatch.OnClientEvent:Connect(function(updates)
+            if typeof(updates) == "table" and updates.boosts ~= nil then
+                applyBoostState(updates.boosts)
+            end
+        end)
+    end
+
+    local boostActivated = remotes:FindFirstChild("BoostActivated")
+    if boostActivated and not Connections.PotionBoostActivated then
+        Connections.PotionBoostActivated = boostActivated.OnClientEvent:Connect(function(boostId, expiresAt)
+            if typeof(boostId) == "string" and typeof(expiresAt) == "number" then
+                ActiveBoosts[boostId] = expiresAt
+                BoostStateReady = true
+            end
+        end)
+    end
+
+    local now = os.clock()
+    if not BoostStateReady and now - BoostStateLastRequestedAt >= 3 then
+        local requestProfile = remotes:FindFirstChild("RequestProfile")
+        if requestProfile then
+            BoostStateLastRequestedAt = now
+            requestProfile:FireServer()
+        end
+    end
+end
+
+local function isBoostActive(boostId)
+    local profile = getProfileData()
+    local boosts = profile and profile.boosts
+    if typeof(boosts) == "table" then
+        applyBoostState(boosts)
+    else
+        ensureBoostState()
+    end
+
+    if not BoostStateReady then
+        return nil
+    end
+
+    local expiresAt = ActiveBoosts[boostId]
+    return typeof(expiresAt) == "number" and os.time() < expiresAt
+end
+
+local function canFireReadyAction(name, minimumDelay)
+    local now = os.clock()
+    local lastFiredAt = ReadyActionLastFiredAt[name] or 0
+    if now - lastFiredAt < (minimumDelay or 2) then
+        return false
+    end
+
+    ReadyActionLastFiredAt[name] = now
+    return true
 end
 
 local function getCollectSlimesRemote()
@@ -363,11 +492,11 @@ local function getBatchSize()
 end
 
 local function getRetryDelay()
-    return math.max(0, getNumberOption("CollectorRetryMs", 300) / 1000)
+    return 0.3
 end
 
 local function getTickDelay()
-    return math.max(0.01, getNumberOption("CollectorTickMs", 50) / 1000)
+    return 0.05
 end
 
 local function getActualCollectorParticle()
@@ -486,11 +615,39 @@ local function fireEmpoweredBoostStack(count, delaySeconds)
     return count
 end
 
+local function maxEmpoweredBoost()
+    local current = tonumber(LocalPlayer:GetAttribute("EmpoweredStack")) or 0
+    local missing = math.max(0, 10 - math.floor(current))
+    if missing == 0 then
+        return 0
+    end
+
+    return fireEmpoweredBoostStack(missing, 0.08)
+end
+
 local function getPlinkoMachine()
     local zones = Workspace:FindFirstChild("Zones", true)
     local lvl10 = zones and zones:FindFirstChild("Lvl10")
     local machine = lvl10 and lvl10:FindFirstChild("PlinkoBallMachine")
     return machine or Workspace:FindFirstChild("PlinkoBallMachine", true)
+end
+
+local function getPlinkoCooldownLabel()
+    local zones = Workspace:FindFirstChild("Zones", true)
+    local lvl10 = zones and zones:FindFirstChild("Lvl10")
+    local field = lvl10 and lvl10:FindFirstChild("PlinkoBallField")
+    local mainPart = field and field:FindFirstChild("mainpart")
+    local cooldownGui = mainPart and mainPart:FindFirstChild("CooldownGui")
+    local cooldown = cooldownGui and cooldownGui:FindFirstChild("Cooldown")
+    return cooldown and cooldown:IsA("TextLabel") and cooldown or nil
+end
+
+local function isReadyLabel(label)
+    return label ~= nil and tostring(label.Text):upper():match("^%s*READY%s*$") ~= nil
+end
+
+local function isPlinkoReady()
+    return isReadyLabel(getPlinkoCooldownLabel())
 end
 
 local function findPlinko4xEndParts()
@@ -544,7 +701,11 @@ local function findPlinko4xEndParts()
     return chosen
 end
 
-local function firePlinko4x(count, delaySeconds)
+local function firePlinko4x()
+    if not isPlinkoReady() or not canFireReadyAction("Plinko", 2) then
+        return 0
+    end
+
     local remote = getActivatePlinkoBallRemote()
     if not remote then
         notify("ActivatePlinkoBall remote was not found.")
@@ -557,22 +718,9 @@ local function firePlinko4x(count, delaySeconds)
         return 0
     end
 
-    count = math.max(1, math.floor(tonumber(count) or 1))
-    delaySeconds = math.max(0, tonumber(delaySeconds) or 0.15)
-
-    local fired = 0
-    for index = 1, count do
-        local part = parts[((index - 1) % #parts) + 1]
-        remote:FireServer()
-        task.wait(math.max(0.1, delaySeconds))
-        remote:FireServer(part)
-        fired += 1
-        if delaySeconds > 0 then
-            task.wait(delaySeconds)
-        end
-    end
-
-    return fired
+    remote:FireServer(parts[1])
+    Marker:SetAttribute("PlinkoLastUsedAt", Workspace:GetServerTimeNow())
+    return 1
 end
 
 local function fireCrateBoost(kind, count, delaySeconds)
@@ -719,7 +867,7 @@ local function collectFallingStarPart(part)
     end
 
     local originalCFrame = root.CFrame
-    local holdSeconds = math.max(0.05, getNumberOption("FallingStarTouchHoldMs", 250) / 1000)
+    local holdSeconds = 0.25
     root.CFrame = CFrame.new(part.Position + Vector3.new(0, 3, 0))
     task.wait(holdSeconds)
 
@@ -744,7 +892,7 @@ local function collectFallingStarPosition(position)
     end
 
     local originalCFrame = root.CFrame
-    local holdSeconds = math.max(0.05, getNumberOption("FallingStarTouchHoldMs", 250) / 1000)
+    local holdSeconds = 0.25
     root.CFrame = CFrame.new(position + Vector3.new(0, 3, 0))
     task.wait(holdSeconds)
 
@@ -757,7 +905,7 @@ local function collectFallingStarPosition(position)
 end
 
 local function collectFallingStars(position)
-    local maxStars = math.max(1, math.floor(getNumberOption("FallingStarMaxTouchCount", 8)))
+    local maxStars = 8
     local collected = 0
 
     if position and collectFallingStarPosition(position) then
@@ -778,7 +926,29 @@ local function collectFallingStars(position)
     return collected
 end
 
+local function getStardustCooldownLabel()
+    local field = Workspace:FindFirstChild("StardustMachineField", true)
+    local mainPart = field and field:FindFirstChild("mainpart")
+    local cooldownGui = mainPart and mainPart:FindFirstChild("CooldownGui")
+    local cooldown = cooldownGui and cooldownGui:FindFirstChild("Cooldown")
+    return cooldown and cooldown:IsA("TextLabel") and cooldown or nil
+end
+
+local function isStardustMachineReady()
+    local label = getStardustCooldownLabel()
+    if not isReadyLabel(label) then
+        return false
+    end
+
+    local gui = label:FindFirstAncestorWhichIsA("BillboardGui") or label:FindFirstAncestorWhichIsA("SurfaceGui")
+    return not gui or gui.Enabled
+end
+
 local function requestFallingStarBoost()
+    if not isStardustMachineReady() or not canFireReadyAction("StardustMachine", 3) then
+        return false
+    end
+
     local remote = getActivateStardustMachineRemote()
     if not remote then
         notify("ActivateStardustMachine remote was not found.")
@@ -811,8 +981,7 @@ local function startFallingStarListeners()
                 end
             end
 
-            local delaySeconds = math.max(0, getNumberOption("FallingStarEventDelayMs", 1500) / 1000)
-            task.delay(delaySeconds, function()
+            task.delay(1.5, function()
                 if Toggles.ToggleAutoCollectFallingStars and Toggles.ToggleAutoCollectFallingStars.Value then
                     collectFallingStars(position)
                 end
@@ -840,20 +1009,17 @@ local function startFallingStarAutomation()
     startFallingStarListeners()
 
     Tasks.FallingStars = task.spawn(function()
-        local nextRequest = 0
         while (Toggles.ToggleAutoFallingStars and Toggles.ToggleAutoFallingStars.Value)
             or (Toggles.ToggleAutoCollectFallingStars and Toggles.ToggleAutoCollectFallingStars.Value) do
-            local now = os.clock()
-            if Toggles.ToggleAutoFallingStars and Toggles.ToggleAutoFallingStars.Value and now >= nextRequest then
+            if Toggles.ToggleAutoFallingStars and Toggles.ToggleAutoFallingStars.Value then
                 requestFallingStarBoost()
-                nextRequest = now + math.max(5, getNumberOption("FallingStarRequestIntervalSeconds", 60))
             end
 
             if Toggles.ToggleAutoCollectFallingStars and Toggles.ToggleAutoCollectFallingStars.Value then
                 collectFallingStars()
             end
 
-            task.wait(math.max(0.25, getNumberOption("FallingStarScanIntervalMs", 750) / 1000))
+            task.wait(0.75)
         end
     end)
 end
@@ -887,7 +1053,28 @@ local function fireGodlyOrbClaim(count, delaySeconds)
     return count
 end
 
+local function getGemBobActionButton()
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    local actionGui = playerGui and playerGui:FindFirstChild("GemBobActionGui")
+    local button = actionGui and actionGui:FindFirstChild("ActionButton", true)
+    return button and button:IsA("TextButton") and button or nil
+end
+
+local function isGemStormReady()
+    local button = getGemBobActionButton()
+    if not button or not tostring(button.Text):upper():find("READY", 1, true) then
+        return false
+    end
+
+    local gui = button:FindFirstAncestorWhichIsA("BillboardGui")
+    return not gui or gui.Enabled
+end
+
 local function fireGemStorm()
+    if not isGemStormReady() or not canFireReadyAction("GemStorm", 3) then
+        return false
+    end
+
     local remote = getGemBobAbilityRequestedRemote()
     if not remote then
         notify("GemBobAbilityRequested remote was not found.")
@@ -1014,8 +1201,11 @@ local function fireSelectedPotionsOnce()
     local fired = 0
     for _, potion in ipairs(PotionOptions) do
         local toggle = Toggles[potion.toggle]
-        if toggle and toggle.Value then
+        local active = isBoostActive(potion.id)
+        local requestReady = os.clock() >= (PotionRequestedUntil[potion.id] or 0)
+        if toggle and toggle.Value and active == false and requestReady then
             remote:FireServer(potion.id)
+            PotionRequestedUntil[potion.id] = os.clock() + 5
             fired += 1
             task.wait(0.05)
         end
@@ -1032,7 +1222,7 @@ local function startAutoPotionsLoop()
     Tasks.AutoPotions = task.spawn(function()
         while Toggles.ToggleAutoPotions and Toggles.ToggleAutoPotions.Value do
             fireSelectedPotionsOnce()
-            task.wait(math.max(60, getNumberOption("AutoPotionsIntervalSeconds", 300)))
+            task.wait(1)
         end
     end)
 end
@@ -1168,23 +1358,7 @@ local function startAutoTotemContact()
     end)
 end
 
-local AmuletTargetValues = {
-    "GiftAmulet",
-    "SummonerAmulet",
-    "TitanicAmulet",
-    "GodlyAmulet",
-    "VoidAmulet",
-    "StardustAmulet",
-    "HastyAmulet",
-    "LuckyAmulet",
-    "CorruptedAmulet",
-    "SlimesAmulet",
-    "ExpAmulet",
-    "GemsAmulet",
-    "MoveSpeedAmulet",
-    "GiantAmulet",
-    "CorruptChanceAmulet",
-}
+local AmuletCountValues = { "1", "2", "3", "4" }
 
 local AmuletPreferredFields = {
     "rarity",
@@ -1226,8 +1400,8 @@ local function setAmuletStatus(text)
     end
 end
 
-local function getSelectedAmuletTargets()
-    local dropdown = Options.AmuletTargets
+local function getSelectedAmuletCounts()
+    local dropdown = Options.AmuletOptionCounts
     if not dropdown or typeof(dropdown.Value) ~= "table" then
         return {}
     end
@@ -1235,8 +1409,8 @@ local function getSelectedAmuletTargets()
     return dropdown.Value
 end
 
-local function hasSelectedAmuletTargets()
-    for _, active in pairs(getSelectedAmuletTargets()) do
+local function hasSelectedAmuletCounts()
+    for _, active in pairs(getSelectedAmuletCounts()) do
         if active then
             return true
         end
@@ -1245,12 +1419,8 @@ local function hasSelectedAmuletTargets()
     return false
 end
 
-local function isSelectedAmuletTarget(amuletType)
-    if typeof(amuletType) ~= "string" then
-        return false
-    end
-
-    return getSelectedAmuletTargets()[amuletType] == true
+local function isSelectedAmuletCount(count)
+    return getSelectedAmuletCounts()[tostring(count)] == true
 end
 
 local function compactAmuletValue(value)
@@ -1403,12 +1573,9 @@ local function getOrderedAmuletOptionKeys(options)
 end
 
 local function findSelectedAmuletTarget(options)
-    for _, key in ipairs(getOrderedAmuletOptionKeys(options)) do
-        local option = options[key]
-        local amuletType = getAmuletType(option)
-        if isSelectedAmuletTarget(amuletType) then
-            return amuletType, key
-        end
+    local count = #getOrderedAmuletOptionKeys(options)
+    if isSelectedAmuletCount(count) then
+        return count, nil
     end
 
     return nil, nil
@@ -1417,9 +1584,9 @@ end
 local function summarizeAmuletRoll(options, rollId, target, targetIndex)
     local lines = {}
     if target then
-        lines[#lines + 1] = "Roll " .. tostring(rollId or "?") .. " hit " .. target .. " at option " .. tostring(targetIndex) .. "."
+        lines[#lines + 1] = "Roll " .. tostring(rollId or "?") .. " hit selected count: " .. tostring(target) .. " option(s)."
     else
-        lines[#lines + 1] = "Roll " .. tostring(rollId or "?") .. " had no selected target."
+        lines[#lines + 1] = "Roll " .. tostring(rollId or "?") .. " did not hit a selected option count."
     end
 
     if typeof(options) ~= "table" then
@@ -1458,6 +1625,14 @@ pickLatestAmulet = function(choice, quiet)
         return false
     end
 
+    if not AmuletChoicePending or AmuletPickPending then
+        if not quiet then
+            notify("No unhandled amulet choice is ready.")
+        end
+        return false
+    end
+
+    AmuletPickPending = true
     remote:FireServer(choice, LatestAmuletRollId)
     Marker:SetAttribute("AmuletLastPicked", choice)
     Marker:SetAttribute("AmuletLastPickRollId", tostring(LatestAmuletRollId))
@@ -1466,6 +1641,10 @@ pickLatestAmulet = function(choice, quiet)
     if not quiet then
         notify("Amulet pick fired: " .. tostring(choice))
     end
+
+    task.delay(3, function()
+        AmuletPickPending = false
+    end)
 
     return true
 end
@@ -1480,6 +1659,8 @@ local function connectAmuletEvents()
     if not Connections.AmuletRollResult then
         Connections.AmuletRollResult = rollResult.OnClientEvent:Connect(function(options, rollId)
             AmuletRollPending = false
+            AmuletChoicePending = true
+            AmuletPickPending = false
             LatestAmuletRollId = rollId
 
             local target, targetIndex = findSelectedAmuletTarget(options)
@@ -1497,14 +1678,7 @@ local function connectAmuletEvents()
                     Toggles.ToggleAutoAmuletRoll:SetValue(false)
                 end
 
-                if Toggles.ToggleAutoPickNewAmulet and Toggles.ToggleAutoPickNewAmulet.Value then
-                    notify("Amulet target hit: " .. target .. ". Auto selecting new.")
-                    task.delay(0.15, function()
-                        pickLatestAmulet("NEW", true)
-                    end)
-                else
-                    notify("Amulet target hit: " .. target .. ". Press Select New to keep it.")
-                end
+                notify("Amulet roll hit " .. tostring(target) .. " option(s). Choose Select New or Keep Old.")
                 return
             end
 
@@ -1520,9 +1694,17 @@ local function connectAmuletEvents()
 
     local pickResult = getRemote("AmuletPickResult", 2)
     if pickResult and not Connections.AmuletPickResult then
-        Connections.AmuletPickResult = pickResult.OnClientEvent:Connect(function(ok, message)
+        Connections.AmuletPickResult = pickResult.OnClientEvent:Connect(function(choice, rollId, ok, message)
+            if rollId == LatestAmuletRollId then
+                AmuletPickPending = false
+                if ok == true then
+                    AmuletChoicePending = false
+                end
+            end
+
             Marker:SetAttribute("AmuletLastPickResult", tostring(ok))
             Marker:SetAttribute("AmuletLastPickMessage", tostring(message or ""))
+            Marker:SetAttribute("AmuletLastPickChoice", tostring(choice or ""))
         end)
     end
 
@@ -1532,7 +1714,7 @@ end
 rollAmuletOnce = function()
     connectAmuletEvents()
 
-    if AmuletRollPending then
+    if AmuletRollPending or AmuletChoicePending then
         return false
     end
 
@@ -1560,8 +1742,8 @@ end
 local function startAutoAmuletRoll()
     stopTask("AutoAmuletRoll")
 
-    if not hasSelectedAmuletTargets() then
-        notify("Select at least one amulet target first.")
+    if not hasSelectedAmuletCounts() then
+        notify("Select at least one amulet option count first.")
         if Toggles.ToggleAutoAmuletRoll then
             Toggles.ToggleAutoAmuletRoll:SetValue(false)
         end
@@ -1579,6 +1761,8 @@ local function startAutoAmuletRoll()
     end)
 end
 
+local fireCleanbotRoll
+
 local function startCleanbotResultListener()
     if Connections.CleanbotResult then
         return true
@@ -1591,22 +1775,48 @@ local function startCleanbotResultListener()
     end
 
     Connections.CleanbotResult = remote.OnClientEvent:Connect(function(cleanbot, isNew)
+        CleanbotRollPending = false
         Marker:SetAttribute("CleanbotLastResult", tostring(cleanbot))
         Marker:SetAttribute("CleanbotLastWasNew", isNew == true)
         Marker:SetAttribute("CleanbotLastResultTime", Workspace:GetServerTimeNow())
+
+        if Toggles.ToggleAutoCleanbotRoll and Toggles.ToggleAutoCleanbotRoll.Value then
+            task.delay(0.05, function()
+                if Toggles.ToggleAutoCleanbotRoll and Toggles.ToggleAutoCleanbotRoll.Value then
+                    fireCleanbotRoll()
+                end
+            end)
+        end
     end)
     return true
 end
 
-local function fireCleanbotRoll()
+fireCleanbotRoll = function()
+    if CleanbotRollPending then
+        return false
+    end
+
     local remote = getRollRoombaRemote()
     if not remote or not startCleanbotResultListener() then
         notify("RollRoomba remote was not found.")
         return false
     end
 
+    CleanbotRollPending = true
+    CleanbotRollSerial += 1
+    local serial = CleanbotRollSerial
     remote:FireServer()
     Marker:SetAttribute("CleanbotRollLastFire", Workspace:GetServerTimeNow())
+
+    task.delay(5, function()
+        if CleanbotRollPending and CleanbotRollSerial == serial then
+            CleanbotRollPending = false
+            if Toggles.ToggleAutoCleanbotRoll and Toggles.ToggleAutoCleanbotRoll.Value then
+                fireCleanbotRoll()
+            end
+        end
+    end)
+
     return true
 end
 
@@ -1615,16 +1825,13 @@ local function startBeamBoostLoop()
 
     Tasks.BeamBoost = task.spawn(function()
         while Toggles.ToggleAutoBeamBoost and Toggles.ToggleAutoBeamBoost.Value do
-            local fired = fireEmpoweredBoostStack(
-                getNumberOption("BeamBoostCount", 10),
-                getNumberOption("BeamBoostFireDelayMs", 80) / 1000
-            )
+            local fired = maxEmpoweredBoost()
 
             if fired > 0 then
-                notify("Beam boost max fired: " .. tostring(fired))
+                Marker:SetAttribute("BeamBoostLastTopUp", fired)
             end
 
-            task.wait(math.max(1, getNumberOption("BeamBoostRefreshSeconds", 25)))
+            task.wait(0.5)
         end
     end)
 end
@@ -1645,11 +1852,8 @@ local function startAutoPlinkoLoop()
 
     Tasks.AutoPlinko = task.spawn(function()
         while Toggles.ToggleAutoPlinko and Toggles.ToggleAutoPlinko.Value do
-            firePlinko4x(
-                getNumberOption("Plinko4xFireCount", 1),
-                getNumberOption("DropBoostDelayMs", 150) / 1000
-            )
-            task.wait(math.max(1, getNumberOption("AutoDropBoostIntervalSeconds", 30)))
+            firePlinko4x()
+            task.wait(0.5)
         end
     end)
 end
@@ -1671,7 +1875,7 @@ local function startGemStormLoop()
     Tasks.GemStorm = task.spawn(function()
         while Toggles.ToggleAutoGemStorm and Toggles.ToggleAutoGemStorm.Value do
             fireGemStorm()
-            task.wait(math.max(1, getNumberOption("GemStormRetrySeconds", 5)))
+            task.wait(0.5)
         end
     end)
 end
@@ -1689,14 +1893,9 @@ end
 
 local function startAutoCleanbotLoop()
     stopTask("AutoCleanbot")
-    startCleanbotResultListener()
-
-    Tasks.AutoCleanbot = task.spawn(function()
-        while Toggles.ToggleAutoCleanbotRoll and Toggles.ToggleAutoCleanbotRoll.Value do
-            fireCleanbotRoll()
-            task.wait(math.max(0.25, getNumberOption("CleanbotRollIntervalMs", 1000) / 1000))
-        end
-    end)
+    if startCleanbotResultListener() then
+        fireCleanbotRoll()
+    end
 end
 
 local function startGemAutoCollect()
@@ -1774,7 +1973,8 @@ local Window = Library:CreateWindow({
 })
 
 local Tabs = {
-    Main = Window:AddTab("Main", "circle"),
+    Main = Window:AddTab("Main", "house"),
+    Automation = Window:AddTab("Automation", "bot"),
     ["UI Settings"] = Window:AddTab("UI Settings", "folder-cog"),
 }
 
@@ -1807,22 +2007,6 @@ CollectorBox:AddSlider("CollectorBatchSize", {
     Rounding = 0,
     Suffix = " ids",
 })
-CollectorBox:AddSlider("CollectorTickMs", {
-    Text = "Loop Delay",
-    Min = 10,
-    Max = 1000,
-    Default = 50,
-    Rounding = 0,
-    Suffix = " ms",
-})
-CollectorBox:AddSlider("CollectorRetryMs", {
-    Text = "Retry Delay",
-    Min = 0,
-    Max = 5000,
-    Default = 300,
-    Rounding = 0,
-    Suffix = " ms",
-})
 CollectorBox:AddButton({
     Text = "Collect Once",
     Func = function()
@@ -1834,46 +2018,18 @@ CollectorBox:AddButton({
     Func = function()
         Options.CollectorRadius:SetValue(10000)
         Options.CollectorBatchSize:SetValue(1000)
-        Options.CollectorTickMs:SetValue(25)
         resizeActualCollectorRing()
         updateMarker()
         notify("Really big collector preset applied.")
     end,
 })
 
-local BeamBoostBox = Tabs.Main:AddRightGroupbox("Beam Boost", "zap")
-BeamBoostBox:AddSlider("BeamBoostCount", {
-    Text = "Max Fire Count",
-    Min = 1,
-    Max = 30,
-    Default = 10,
-    Rounding = 0,
-    Suffix = " fires",
-})
-BeamBoostBox:AddSlider("BeamBoostFireDelayMs", {
-    Text = "Fire Delay",
-    Min = 0,
-    Max = 1000,
-    Default = 80,
-    Rounding = 0,
-    Suffix = " ms",
-})
-BeamBoostBox:AddSlider("BeamBoostRefreshSeconds", {
-    Text = "Auto Refresh",
-    Min = 1,
-    Max = 60,
-    Default = 25,
-    Rounding = 0,
-    Suffix = " s",
-})
+local BeamBoostBox = Tabs.Automation:AddLeftGroupbox("Beam Boost", "zap")
 BeamBoostBox:AddButton({
     Text = "Max Beam Boost",
     Func = function()
         task.spawn(function()
-            local fired = fireEmpoweredBoostStack(
-                getNumberOption("BeamBoostCount", 10),
-                getNumberOption("BeamBoostFireDelayMs", 80) / 1000
-            )
+            local fired = maxEmpoweredBoost()
             notify("Beam boost max fired: " .. tostring(fired))
         end)
     end,
@@ -1883,7 +2039,7 @@ BeamBoostBox:AddCheckbox("ToggleAutoBeamBoost", {
     Default = false,
 })
 
-local AbilityBox = Tabs.Main:AddRightGroupbox("Abilities", "wand-sparkles")
+local AbilityBox = Tabs.Automation:AddRightGroupbox("Abilities", "wand-sparkles")
 AbilityBox:AddSlider("AutoAbilitiesIntervalMs", {
     Text = "Ability Interval",
     Min = 250,
@@ -1921,15 +2077,7 @@ AbilityBox:AddCheckbox("ToggleAbilityAutocollect", {
     Default = false,
 })
 
-local PotionBox = Tabs.Main:AddRightGroupbox("Potions", "flask-conical")
-PotionBox:AddSlider("AutoPotionsIntervalSeconds", {
-    Text = "Potion Interval",
-    Min = 60,
-    Max = 1800,
-    Default = 300,
-    Rounding = 0,
-    Suffix = " s",
-})
+local PotionBox = Tabs.Automation:AddLeftGroupbox("Potions", "flask-conical")
 PotionBox:AddButton({
     Text = "Use Selected Potions",
     Func = function()
@@ -1963,7 +2111,7 @@ PotionBox:AddCheckbox("TogglePotionElemental", {
     Default = false,
 })
 
-local TotemBox = Tabs.Main:AddRightGroupbox("Totems", "badge-plus")
+local TotemBox = Tabs.Automation:AddRightGroupbox("Totems", "badge-plus")
 TotemBox:AddSlider("TotemContactIntervalSeconds", {
     Text = "Totem Check Interval",
     Min = 5,
@@ -1991,14 +2139,13 @@ TotemBox:AddCheckbox("ToggleAutoTotemContact", {
     Default = false,
 })
 
-local AmuletBox = Tabs.Main:AddRightGroupbox("Auto Amulet", "gem")
-AmuletBox:AddDropdown("AmuletTargets", {
-    Text = "Stop On",
-    Values = AmuletTargetValues,
+local AmuletBox = Tabs.Automation:AddLeftGroupbox("Auto Amulet", "gem")
+AmuletBox:AddDropdown("AmuletOptionCounts", {
+    Text = "Stop On Option Count",
+    Values = AmuletCountValues,
     Multi = true,
-    Searchable = true,
     AllowNull = true,
-    Default = { "GiftAmulet", "SummonerAmulet" },
+    Default = { "4" },
 })
 AmuletBox:AddSlider("AutoAmuletRollDelayMs", {
     Text = "Roll Delay",
@@ -2009,11 +2156,7 @@ AmuletBox:AddSlider("AutoAmuletRollDelayMs", {
     Suffix = " ms",
 })
 AmuletBox:AddCheckbox("ToggleAutoAmuletRoll", {
-    Text = "Auto Roll Until Target",
-    Default = false,
-})
-AmuletBox:AddCheckbox("ToggleAutoPickNewAmulet", {
-    Text = "Auto Select New On Hit",
+    Text = "Auto Roll Until Count",
     Default = false,
 })
 AmuletBox:AddButton({
@@ -2039,25 +2182,9 @@ AmuletStatusLabel = AmuletBox:AddLabel({
     DoesWrap = true,
 })
 
-local DropBoostBox = Tabs.Main:AddRightGroupbox("Plinko / Crates", "gift")
-DropBoostBox:AddSlider("Plinko4xFireCount", {
-    Text = "Plinko 4x Fires",
-    Min = 1,
-    Max = 25,
-    Default = 1,
-    Rounding = 0,
-    Suffix = " fires",
-})
-DropBoostBox:AddSlider("DropBoostDelayMs", {
-    Text = "Fire Delay",
-    Min = 0,
-    Max = 1000,
-    Default = 150,
-    Rounding = 0,
-    Suffix = " ms",
-})
+local DropBoostBox = Tabs.Automation:AddLeftGroupbox("Plinko / Crates", "gift")
 DropBoostBox:AddSlider("AutoDropBoostIntervalSeconds", {
-    Text = "Auto Interval",
+    Text = "Crate Interval",
     Min = 1,
     Max = 300,
     Default = 30,
@@ -2068,11 +2195,8 @@ DropBoostBox:AddButton({
     Text = "Get Plinko 4x",
     Func = function()
         task.spawn(function()
-            local fired = firePlinko4x(
-                getNumberOption("Plinko4xFireCount", 1),
-                getNumberOption("DropBoostDelayMs", 150) / 1000
-            )
-            notify("Plinko 4x fired: " .. tostring(fired))
+            local fired = firePlinko4x()
+            notify(fired > 0 and "Plinko 4x fired." or "Plinko is not ready yet.")
         end)
     end,
 })
@@ -2084,7 +2208,7 @@ DropBoostBox:AddButton({
     Text = "Get Crate Boost",
     Func = function()
         task.spawn(function()
-            local fired = fireCrateBoost("goldenCrate", 1, getNumberOption("DropBoostDelayMs", 150) / 1000)
+            local fired = fireCrateBoost("goldenCrate", 1, 0)
             notify("Golden-first crate boost fired: " .. tostring(fired))
         end)
     end,
@@ -2094,58 +2218,7 @@ DropBoostBox:AddCheckbox("ToggleAutoCrate", {
     Default = false,
 })
 
-local FallingStarBox = Tabs.Main:AddRightGroupbox("Falling Stars", "star")
-FallingStarBox:AddSlider("FallingStarRequestIntervalSeconds", {
-    Text = "Machine Interval",
-    Min = 5,
-    Max = 600,
-    Default = 60,
-    Rounding = 0,
-    Suffix = " s",
-})
-FallingStarBox:AddSlider("FallingStarScanIntervalMs", {
-    Text = "Scan Delay",
-    Min = 250,
-    Max = 5000,
-    Default = 750,
-    Rounding = 0,
-    Suffix = " ms",
-})
-FallingStarBox:AddSlider("FallingStarEventDelayMs", {
-    Text = "Event Wait",
-    Min = 0,
-    Max = 5000,
-    Default = 1500,
-    Rounding = 0,
-    Suffix = " ms",
-})
-FallingStarBox:AddSlider("FallingStarTouchHoldMs", {
-    Text = "Touch Hold",
-    Min = 50,
-    Max = 2000,
-    Default = 250,
-    Rounding = 0,
-    Suffix = " ms",
-})
-FallingStarBox:AddSlider("FallingStarMaxTouchCount", {
-    Text = "Touch Limit",
-    Min = 1,
-    Max = 25,
-    Default = 8,
-    Rounding = 0,
-    Suffix = " stars",
-})
-FallingStarBox:AddButton({
-    Text = "Max Falling Star Boost",
-    Func = function()
-        task.spawn(function()
-            startFallingStarListeners()
-            local requested = requestFallingStarBoost()
-            local touched = collectFallingStars()
-            notify("Falling star request: " .. tostring(requested) .. " | touched: " .. tostring(touched))
-        end)
-    end,
-})
+local FallingStarBox = Tabs.Automation:AddRightGroupbox("Falling Stars", "star")
 FallingStarBox:AddCheckbox("ToggleAutoFallingStars", {
     Text = "Auto Start Machine",
     Default = false,
@@ -2159,7 +2232,7 @@ FallingStarBox:AddCheckbox("ToggleFallingStarReturn", {
     Default = true,
 })
 
-local OrbBox = Tabs.Main:AddLeftGroupbox("Godly Orb", "sparkles")
+local OrbBox = Tabs.Automation:AddRightGroupbox("Godly Orb", "sparkles")
 OrbBox:AddSlider("GodlyOrbClaimDelayMs", {
     Text = "Orb Claim Delay",
     Min = 250,
@@ -2181,21 +2254,7 @@ OrbBox:AddCheckbox("ToggleAutoGodlyOrb", {
     Default = true,
 })
 
-local GemStormBox = Tabs.Main:AddLeftGroupbox("Gem Storm", "gem")
-GemStormBox:AddSlider("GemStormRetrySeconds", {
-    Text = "Request Interval",
-    Min = 1,
-    Max = 60,
-    Default = 5,
-    Rounding = 0,
-    Suffix = " s",
-})
-GemStormBox:AddButton({
-    Text = "Start Gem Storm",
-    Func = function()
-        notify("Gem Storm requested: " .. tostring(fireGemStorm()))
-    end,
-})
+local GemStormBox = Tabs.Automation:AddRightGroupbox("Gem Storm", "gem")
 GemStormBox:AddCheckbox("ToggleAutoGemStorm", {
     Text = "Auto Gem Storm",
     Default = false,
@@ -2205,15 +2264,7 @@ GemStormBox:AddCheckbox("ToggleAutoCollectGemStorm", {
     Default = true,
 })
 
-local CleanbotBox = Tabs.Main:AddLeftGroupbox("Cleanbot", "bot")
-CleanbotBox:AddSlider("CleanbotRollIntervalMs", {
-    Text = "Roll Interval",
-    Min = 250,
-    Max = 10000,
-    Default = 1000,
-    Rounding = 0,
-    Suffix = " ms",
-})
+local CleanbotBox = Tabs.Automation:AddRightGroupbox("Cleanbot", "bot")
 CleanbotBox:AddButton({
     Text = "Roll Cleanbot Once",
     Func = function()
@@ -2370,8 +2421,6 @@ Options.CollectorRadius:OnChanged(function()
     resizeActualCollectorRing()
 end)
 Options.CollectorBatchSize:OnChanged(updateMarker)
-Options.CollectorTickMs:OnChanged(updateMarker)
-Options.CollectorRetryMs:OnChanged(updateMarker)
 Options.PlayerSpeed:OnChanged(function()
     if Toggles.TogglePlayerSpeed and Toggles.TogglePlayerSpeed.Value then
         applyPlayerSpeed()
