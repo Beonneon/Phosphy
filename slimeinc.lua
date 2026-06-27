@@ -3289,10 +3289,10 @@ do
 local CSlimeBox = Tabs.Automation:AddLeftGroupbox("CS Slime", "circle-dot")
 CSlimeBox:AddSlider("CSlimeCollectDelaySeconds", {
     Text = "Collect Interval",
-    Min = 0,
-    Max = 1,
-    Default = 1,
-    Rounding = 2,
+    Min = 1,
+    Max = 360,
+    Default = 10,
+    Rounding = 0,
     Suffix = " s",
 })
 CSlimeBox:AddCheckbox("ToggleAutoCSlime", {
