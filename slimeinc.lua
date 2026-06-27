@@ -2671,63 +2671,58 @@ function Extra.setCSlimeStatus(message)
     end
 end
 
-function Extra.connectCSlimeSpawnEvent()
-    if Connections.CSlimeSpawn then
-        return true
+function Extra.getCSlimeBaseplateCFrame()
+    local world = Workspace:FindFirstChild("World")
+    local zones = world and world:FindFirstChild("Zones")
+    local level = zones and zones:FindFirstChild("Lvl150")
+    local baseplate = level and level:FindFirstChild("CorruptedBaseplate")
+    if not baseplate then
+        return nil
     end
 
-    local events = ReplicatedStorage:FindFirstChild("CSlimeSpawnEvents")
-    local spawnRemote = events and events:FindFirstChild("SpawnSlime")
-    if not spawnRemote or not spawnRemote:IsA("RemoteEvent") then
-        return false
+    if baseplate:IsA("BasePart") then
+        return baseplate.CFrame * CFrame.new(0, (baseplate.Size.Y / 2) + 2.5, 0)
     end
 
-    Connections.CSlimeSpawn = spawnRemote.OnClientEvent:Connect(function(slimeModel, slimeId, respawnPart)
-        Extra.LatestCSlimeModel = slimeModel
-        Extra.LatestCSlimeId = slimeId
-        Extra.LatestCSlimeRespawnPart = respawnPart
-        Marker:SetAttribute("CSlimeLastId", tostring(slimeId))
-        Marker:SetAttribute("CSlimeLastSpawnAt", Workspace:GetServerTimeNow())
-        Extra.setCSlimeStatus("CS slime captured. Teleporting and collecting...")
-    end)
-    Extra.setCSlimeStatus("Waiting for a CS slime to spawn...")
-    return true
+    local part = baseplate:FindFirstChildWhichIsA("BasePart", true)
+    if part then
+        return part.CFrame * CFrame.new(0, (part.Size.Y / 2) + 2.5, 0)
+    end
+    return Extra.instanceCFrame(baseplate)
 end
 
 function Extra.startAutoCSlime()
     stopTask("AutoCSlime")
     disconnect("CSlimeSpawn")
     Extra.CSlimeMoveCFrame = nil
-    Extra.setCSlimeStatus("Waiting for CSlimeSpawnEvents...")
+    Extra.setCSlimeStatus("Finding the Level 150 corrupted baseplate...")
 
     Tasks.AutoCSlime = task.spawn(function()
         while Toggles.ToggleAutoCSlime and Toggles.ToggleAutoCSlime.Value do
-            if not Extra.connectCSlimeSpawnEvent() then
+            local target = Extra.getCSlimeBaseplateCFrame()
+            if not target then
+                Extra.CSlimeMoveCFrame = nil
+                Extra.setCSlimeStatus("Waiting for World.Zones.Lvl150.CorruptedBaseplate...")
                 task.wait(0.5)
                 continue
             end
 
-            local events = ReplicatedStorage:FindFirstChild("CSlimeSpawnEvents")
-            local collectRemote = events and events:FindFirstChild("SlimeCollected")
-            local target = Extra.instanceCFrame(Extra.LatestCSlimeModel)
-                or Extra.instanceCFrame(Extra.LatestCSlimeRespawnPart)
-            if Extra.LatestCSlimeId ~= nil and collectRemote and collectRemote:IsA("RemoteEvent") and target then
-                Extra.CSlimeMoveCFrame = target + Vector3.new(0, 3, 0)
-                local root = getRoot()
-                if root then
-                    root.AssemblyLinearVelocity = Vector3.zero
-                    root.AssemblyAngularVelocity = Vector3.zero
-                    root.CFrame = Extra.CSlimeMoveCFrame
-                end
-
-                task.wait(0.1)
-                collectRemote:FireServer(Extra.LatestCSlimeId)
-                Marker:SetAttribute("CSlimeLastCollectAt", Workspace:GetServerTimeNow())
-                Extra.setCSlimeStatus("Collecting CS slime " .. tostring(Extra.LatestCSlimeId) .. ".")
-                task.wait(math.max(0.03, getNumberOption("CSlimeCollectDelaySeconds", 1)))
-            else
-                task.wait(0.1)
+            Extra.CSlimeMoveCFrame = target
+            local root = getRoot()
+            if root then
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+                root.CFrame = target
             end
+
+            Extra.setCSlimeStatus("Touching the corrupted baseplate...")
+            task.wait(0.6)
+            Extra.CSlimeMoveCFrame = nil
+            Marker:SetAttribute("CSlimeLastCollectAt", Workspace:GetServerTimeNow())
+
+            local interval = math.max(1, getNumberOption("CSlimeCollectDelaySeconds", 10))
+            Extra.setCSlimeStatus(string.format("Baseplate visited. Next visit in %d seconds.", interval))
+            task.wait(interval)
         end
 
         Extra.CSlimeMoveCFrame = nil
