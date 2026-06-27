@@ -654,7 +654,7 @@ local function startCorruptedSlimeLoop()
     Tasks.CorruptedSlime = task.spawn(function()
         while Toggles.ToggleAutoCorruptedSlime and Toggles.ToggleAutoCorruptedSlime.Value do
             fireCorruptedSlimeCollect()
-            task.wait(math.max(1, getNumberOption("CorruptedSlimeIntervalSeconds", 10)))
+            task.wait(math.max(0, getNumberOption("CorruptedSlimeIntervalSeconds", 0.1)))
         end
     end)
 end
@@ -1457,10 +1457,10 @@ CorruptedSlimeBox:AddLabel({
 })
 CorruptedSlimeBox:AddSlider("CorruptedSlimeIntervalSeconds", {
     Text = "CS Loop Interval",
-    Min = 1,
-    Max = 60,
-    Default = 10,
-    Rounding = 0,
+    Min = 0,
+    Max = 1,
+    Default = 0.1,
+    Rounding = 2,
     Suffix = " s",
 })
 CorruptedSlimeBox:AddButton({
