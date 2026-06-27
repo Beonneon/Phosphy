@@ -80,8 +80,6 @@ local FallingStarMoveUntil = 0
 local MidasMovePosition = nil
 local MidasMoveUntil = 0
 local MidasLastCollectAt = {}
-local LastVisitedTotemArea = nil
-local TotemAutofarmResumeAt = 0
 local AutofarmCFrame = CFrame.new(
     -5.32521152,
     4.3090837,
@@ -459,20 +457,14 @@ local function getPriorityMovementTarget()
 
     local autoFarm = Toggles.ToggleAutoFarm and Toggles.ToggleAutoFarm.Value
     local autoTotem = Toggles.ToggleAutoTotemContact and Toggles.ToggleAutoTotemContact.Value
-    local totemCFrame, totemArea = getTotemAreaCFrame()
-    if not totemArea then
-        LastVisitedTotemArea = nil
-    elseif (autoFarm or autoTotem) and totemCFrame and totemArea ~= LastVisitedTotemArea then
-        LastVisitedTotemArea = totemArea
-        TotemAutofarmResumeAt = os.clock() + 0.75
-        Marker:SetAttribute("TotemTeleportedAt", Workspace:GetServerTimeNow())
-        return totemCFrame, "Totem Teleport"
+    if autoTotem then
+        local totemCFrame = getTotemAreaCFrame()
+        if totemCFrame then
+            return totemCFrame, "Totem"
+        end
     end
 
     if autoFarm then
-        if os.clock() < TotemAutofarmResumeAt then
-            return nil, "Totem Contact"
-        end
         return AutofarmCFrame, "Autofarm"
     end
 
@@ -2481,7 +2473,6 @@ Toggles.ToggleAutoPotions:OnChanged(function(state)
 end)
 Toggles.ToggleAutoTotemContact:OnChanged(function(state)
     if state then
-        LastVisitedTotemArea = nil
         startAutoTotemContact()
     else
         stopTask("AutoTotemContact")
@@ -2549,9 +2540,6 @@ Toggles.ToggleAutoMidasGold:OnChanged(function(state)
 end)
 Toggles.ToggleAutoFarm:OnChanged(function(state)
     Marker:SetAttribute("AutoFarmEnabled", state == true)
-    if state then
-        LastVisitedTotemArea = nil
-    end
 end)
 Toggles.TogglePlayerSpeed:OnChanged(function(state)
     if state then
