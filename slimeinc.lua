@@ -1809,7 +1809,11 @@ end
 
 function Extra.setBlessingPriorityStatus()
     local order = Extra.BlessingPickPriority or {}
-    local text = #order > 0 and ("Priority: " .. table.concat(order, " > ")) or "Priority: Random"
+    local lines = { "Priority:" }
+    for index, label in ipairs(order) do
+        lines[#lines + 1] = string.format("%d. %s", index, label)
+    end
+    local text = #order > 0 and table.concat(lines, "\n") or "Priority: Random"
     Marker:SetAttribute("BlessingPickPriority", text)
     if Extra.BlessingPriorityLabel then
         pcall(function()
@@ -1947,25 +1951,34 @@ function Extra.connectBlessingEvents()
     end
 
     Connections.BlessingResult = remote.OnClientEvent:Connect(function(slot, options, success)
+        local now = Workspace:GetServerTimeNow()
         Extra.BlessingActionPending = false
         Marker:SetAttribute("BlessingLastSlot", tonumber(slot) or 0)
-        Marker:SetAttribute("BlessingLastResultAt", Workspace:GetServerTimeNow())
+        Marker:SetAttribute("BlessingLastResultAt", now)
 
         if success and typeof(options) == "table" then
+            Extra.BlessingRetryAfter = now + 0.5
             Extra.BlessingPendingOptions = options
             Extra.setBlessingStatus("Blessing options received. Selecting the best safe card...")
         elseif success then
+            Extra.BlessingRetryAfter = now + 0.75
             Extra.BlessingPendingOptions = nil
             Extra.setBlessingStatus("Blessing choice accepted.")
         else
-            Extra.setBlessingStatus("Blessing request was rejected or unavailable.")
+            Extra.BlessingRetryAfter = now + 5
+            Extra.setBlessingStatus("Blessing request rejected or unavailable. Retrying in 5 seconds.")
         end
     end)
     return true
 end
 
-function Extra.autoBlessingStep()
+function Extra.autoBlessingStep(forceRoll)
     if Extra.BlessingActionPending then
+        return false
+    end
+
+    local now = Workspace:GetServerTimeNow()
+    if now < (Extra.BlessingRetryAfter or 0) then
         return false
     end
 
@@ -1996,7 +2009,17 @@ function Extra.autoBlessingStep()
 
         Extra.BlessingPendingOptions = nil
         Extra.markBlessingActionPending(4)
-        activateRemote:FireServer(choice)
+        local controller = Extra.getBlessingController()
+        local usedController = false
+        if controller and typeof(controller.getPendingOptions) == "function" and typeof(controller.pick) == "function" then
+            local pendingOk, pending = pcall(controller.getPendingOptions)
+            if pendingOk and typeof(pending) == "table" then
+                usedController = pcall(controller.pick, choice)
+            end
+        end
+        if not usedController then
+            activateRemote:FireServer(choice)
+        end
         local definition = Extra.BlessingByKey[choice]
         Extra.setBlessingStatus("Selecting " .. (definition and definition.label or choice) .. ".")
         Marker:SetAttribute("BlessingLastChoice", choice)
@@ -2009,11 +2032,24 @@ function Extra.autoBlessingStep()
         return false
     end
 
-    if (tonumber(profile.blessingSlots) or 0) > 0 then
+    local autoRoll = forceRoll == true or (Toggles.ToggleAutoBlessing and Toggles.ToggleAutoBlessing.Value)
+    local autoSacrifice = Toggles.ToggleAutoBlessingSacrifice and Toggles.ToggleAutoBlessingSacrifice.Value
+    if (autoRoll or autoSacrifice) and (tonumber(profile.blessingSlots) or 0) > 0 then
         Extra.markBlessingActionPending(4)
         activateRemote:FireServer()
         Extra.setBlessingStatus("Rolling an available blessing slot...")
         return true
+    end
+
+    if not autoSacrifice then
+        Extra.setBlessingStatus("Waiting for a free blessing slot. Auto Sacrifice is off.")
+        return false
+    end
+
+    local gemEnergy = tonumber(profile.gemEnergy) or 0
+    if gemEnergy < 10 then
+        Extra.setBlessingStatus(string.format("Need 10 GE to sacrifice. Current GE: %s", tostring(gemEnergy)))
+        return false
     end
 
     local sacrifice = Extra.findSacrificialBlessing(profile)
@@ -2025,19 +2061,36 @@ function Extra.autoBlessingStep()
         return true
     end
 
-    Extra.setBlessingStatus("Waiting for a slot or whitelisted owned blessing.")
+    Extra.setBlessingStatus("Waiting for a whitelisted owned blessing to sacrifice.")
     return false
+end
+
+function Extra.autoBlessingEnabled()
+    return (Toggles.ToggleAutoBlessing and Toggles.ToggleAutoBlessing.Value)
+        or (Toggles.ToggleAutoBlessingSacrifice and Toggles.ToggleAutoBlessingSacrifice.Value)
 end
 
 function Extra.startAutoBlessing()
     stopTask("AutoBlessing")
     Extra.connectBlessingEvents()
     Tasks.AutoBlessing = task.spawn(function()
-        while Toggles.ToggleAutoBlessing and Toggles.ToggleAutoBlessing.Value do
+        while Extra.autoBlessingEnabled() do
             Extra.autoBlessingStep()
             task.wait(0.15)
         end
     end)
+end
+
+function Extra.refreshAutoBlessing()
+    if Extra.autoBlessingEnabled() then
+        Extra.startAutoBlessing()
+        return
+    end
+
+    stopTask("AutoBlessing")
+    Extra.BlessingActionPending = false
+    Extra.BlessingRetryAfter = 0
+    Extra.setBlessingStatus("Auto Blessing is off.")
 end
 
 local function fireAbilitiesOnce()
@@ -3088,13 +3141,17 @@ Extra.BlessingPriorityLabel = AutoBlessingBox:AddLabel({
     DoesWrap = true,
 })
 AutoBlessingBox:AddCheckbox("ToggleAutoBlessing", {
-    Text = "Auto Roll and Improve",
+    Text = "Auto Roll / Pick",
+    Default = false,
+})
+AutoBlessingBox:AddCheckbox("ToggleAutoBlessingSacrifice", {
+    Text = "Auto Sacrifice (10 GE)",
     Default = false,
 })
 AutoBlessingBox:AddButton({
     Text = "Run One Step",
     Func = function()
-        notify("Auto blessing step fired: " .. tostring(Extra.autoBlessingStep()))
+        notify("Auto blessing step fired: " .. tostring(Extra.autoBlessingStep(true)))
     end,
 })
 Extra.BlessingStatusLabel = AutoBlessingBox:AddLabel({
@@ -3531,13 +3588,10 @@ Toggles.ToggleAutoCSlime:OnChanged(function(state)
     end
 end)
 Toggles.ToggleAutoBlessing:OnChanged(function(state)
-    if state then
-        Extra.startAutoBlessing()
-    else
-        stopTask("AutoBlessing")
-        Extra.BlessingActionPending = false
-        Extra.setBlessingStatus("Auto Blessing is off.")
-    end
+    Extra.refreshAutoBlessing()
+end)
+Toggles.ToggleAutoBlessingSacrifice:OnChanged(function(state)
+    Extra.refreshAutoBlessing()
 end)
 Toggles.ToggleAutoGodlyOrb:OnChanged(function(state)
     if state then
@@ -3702,7 +3756,7 @@ end
 if Toggles.ToggleAutoCSlime.Value then
     Extra.startAutoCSlime()
 end
-if Toggles.ToggleAutoBlessing.Value then
+if Extra.autoBlessingEnabled() then
     Extra.startAutoBlessing()
 end
 if Toggles.ToggleAutoPlinko.Value then
