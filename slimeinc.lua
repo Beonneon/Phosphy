@@ -186,6 +186,30 @@ local function getRoombaRollResultRemote()
     return remotes:FindFirstChild("RoombaRollResult") or remotes:WaitForChild("RoombaRollResult", 10)
 end
 
+local function getActivateStardustMachineRemote()
+    local remotes = getRemotes()
+    if not remotes then
+        return nil
+    end
+    return remotes:FindFirstChild("ActivateStardustMachine") or remotes:WaitForChild("ActivateStardustMachine", 10)
+end
+
+local function getStardustStarFallingRemote()
+    local remotes = getRemotes()
+    if not remotes then
+        return nil
+    end
+    return remotes:FindFirstChild("StardustStarFalling") or remotes:WaitForChild("StardustStarFalling", 10)
+end
+
+local function getFallingStarAwardedRemote()
+    local remotes = getRemotes()
+    if not remotes then
+        return nil
+    end
+    return remotes:FindFirstChild("FallingStarAwarded") or remotes:WaitForChild("FallingStarAwarded", 10)
+end
+
 local function getSlimesFolder()
     local runtime = Workspace:FindFirstChild("Runtime") or Workspace:WaitForChild("Runtime", 10)
     if not runtime then
@@ -547,6 +571,277 @@ local function fireCrateBoost(kind, count, delaySeconds)
     end
 
     return count
+end
+
+local function getFallingStarRoots()
+    local roots = {}
+    local runtime = Workspace:FindFirstChild("Runtime")
+    if runtime then
+        roots[#roots + 1] = runtime
+    end
+
+    local namedRoots = { "FallingStars", "StardustStars", "Collectibles" }
+    for _, name in ipairs(namedRoots) do
+        local root = Workspace:FindFirstChild(name)
+        if root then
+            roots[#roots + 1] = root
+        end
+    end
+
+    return roots
+end
+
+local function isFallingStarPart(part)
+    if not (part and part:IsA("BasePart")) then
+        return false
+    end
+
+    local fullName = part:GetFullName()
+    local blockedNames = { "SpawnPoints", "Audio", "Leaderboard", "World.Map" }
+    for _, blocked in ipairs(blockedNames) do
+        if fullName:find(blocked, 1, true) then
+            return false
+        end
+    end
+
+    local current = part
+    while current and current ~= Workspace do
+        local compactName = tostring(current.Name):lower():gsub("%s+", "")
+        if compactName:find("fallingstar", 1, true) or compactName:find("starduststar", 1, true) then
+            return true
+        end
+        current = current.Parent
+    end
+
+    return false
+end
+
+local function findFallingStarParts()
+    local found = {}
+    local used = {}
+
+    for _, root in ipairs(getFallingStarRoots()) do
+        for _, descendant in ipairs(root:GetDescendants()) do
+            if isFallingStarPart(descendant) and not used[descendant] then
+                used[descendant] = true
+                found[#found + 1] = descendant
+            end
+        end
+    end
+
+    return found
+end
+
+local function payloadToPosition(value, depth)
+    depth = depth or 0
+    if depth > 3 then
+        return nil
+    end
+
+    local valueType = typeof(value)
+    if valueType == "Vector3" then
+        return value
+    end
+    if valueType == "CFrame" then
+        return value.Position
+    end
+    if valueType == "Instance" then
+        if value:IsA("BasePart") then
+            return value.Position
+        end
+        if value:IsA("Model") then
+            return value:GetPivot().Position
+        end
+        return nil
+    end
+    if valueType ~= "table" then
+        return nil
+    end
+
+    local preferredKeys = {
+        "position",
+        "Position",
+        "targetPosition",
+        "TargetPosition",
+        "landingPosition",
+        "LandingPosition",
+        "hitPosition",
+        "HitPosition",
+        "pos",
+        "cframe",
+        "CFrame",
+    }
+
+    for _, key in ipairs(preferredKeys) do
+        local found = payloadToPosition(value[key], depth + 1)
+        if found then
+            return found
+        end
+    end
+
+    for _, nested in pairs(value) do
+        local found = payloadToPosition(nested, depth + 1)
+        if found then
+            return found
+        end
+    end
+
+    return nil
+end
+
+local function collectFallingStarPart(part)
+    local root = getRoot()
+    if not (root and part and part.Parent) then
+        return false
+    end
+
+    local originalCFrame = root.CFrame
+    local holdSeconds = math.max(0.05, getNumberOption("FallingStarTouchHoldMs", 250) / 1000)
+    root.CFrame = CFrame.new(part.Position + Vector3.new(0, 3, 0))
+    task.wait(holdSeconds)
+
+    if typeof(firetouchinterest) == "function" then
+        pcall(firetouchinterest, root, part, 0)
+        task.wait(0.05)
+        pcall(firetouchinterest, root, part, 1)
+    end
+
+    if Toggles.ToggleFallingStarReturn and Toggles.ToggleFallingStarReturn.Value then
+        task.wait(0.05)
+        root.CFrame = originalCFrame
+    end
+
+    return true
+end
+
+local function collectFallingStarPosition(position)
+    local root = getRoot()
+    if not (root and typeof(position) == "Vector3") then
+        return false
+    end
+
+    local originalCFrame = root.CFrame
+    local holdSeconds = math.max(0.05, getNumberOption("FallingStarTouchHoldMs", 250) / 1000)
+    root.CFrame = CFrame.new(position + Vector3.new(0, 3, 0))
+    task.wait(holdSeconds)
+
+    if Toggles.ToggleFallingStarReturn and Toggles.ToggleFallingStarReturn.Value then
+        task.wait(0.05)
+        root.CFrame = originalCFrame
+    end
+
+    return true
+end
+
+local function collectFallingStars(position)
+    local maxStars = math.max(1, math.floor(getNumberOption("FallingStarMaxTouchCount", 8)))
+    local collected = 0
+
+    if position and collectFallingStarPosition(position) then
+        collected += 1
+    end
+
+    for _, part in ipairs(findFallingStarParts()) do
+        if collected >= maxStars then
+            break
+        end
+        if collectFallingStarPart(part) then
+            collected += 1
+        end
+    end
+
+    Marker:SetAttribute("FallingStarLastCollectCount", collected)
+    Marker:SetAttribute("FallingStarLastCollectAt", Workspace:GetServerTimeNow())
+    return collected
+end
+
+local function requestFallingStarBoost()
+    local remote = getActivateStardustMachineRemote()
+    if not remote then
+        notify("ActivateStardustMachine remote was not found.")
+        return false
+    end
+
+    remote:FireServer()
+    Marker:SetAttribute("StardustMachineLastRequest", Workspace:GetServerTimeNow())
+    return true
+end
+
+local function startFallingStarListeners()
+    disconnect("StardustStarFalling")
+    disconnect("FallingStarAwarded")
+
+    local fallingRemote = getStardustStarFallingRemote()
+    if fallingRemote then
+        Connections.StardustStarFalling = fallingRemote.OnClientEvent:Connect(function(...)
+            Marker:SetAttribute("FallingStarLastEventAt", Workspace:GetServerTimeNow())
+            if not (Toggles.ToggleAutoCollectFallingStars and Toggles.ToggleAutoCollectFallingStars.Value) then
+                return
+            end
+
+            local args = { ... }
+            local position
+            for _, value in ipairs(args) do
+                position = payloadToPosition(value)
+                if position then
+                    break
+                end
+            end
+
+            local delaySeconds = math.max(0, getNumberOption("FallingStarEventDelayMs", 1500) / 1000)
+            task.delay(delaySeconds, function()
+                if Toggles.ToggleAutoCollectFallingStars and Toggles.ToggleAutoCollectFallingStars.Value then
+                    collectFallingStars(position)
+                end
+            end)
+        end)
+    end
+
+    local awardedRemote = getFallingStarAwardedRemote()
+    if awardedRemote then
+        Connections.FallingStarAwarded = awardedRemote.OnClientEvent:Connect(function(...)
+            Marker:SetAttribute("FallingStarLastAwardAt", Workspace:GetServerTimeNow())
+            Marker:SetAttribute("FallingStarLastAwardArgs", select("#", ...))
+        end)
+    end
+end
+
+local function stopFallingStarAutomation()
+    stopTask("FallingStars")
+    disconnect("StardustStarFalling")
+    disconnect("FallingStarAwarded")
+end
+
+local function startFallingStarAutomation()
+    stopTask("FallingStars")
+    startFallingStarListeners()
+
+    Tasks.FallingStars = task.spawn(function()
+        local nextRequest = 0
+        while (Toggles.ToggleAutoFallingStars and Toggles.ToggleAutoFallingStars.Value)
+            or (Toggles.ToggleAutoCollectFallingStars and Toggles.ToggleAutoCollectFallingStars.Value) do
+            local now = os.clock()
+            if Toggles.ToggleAutoFallingStars and Toggles.ToggleAutoFallingStars.Value and now >= nextRequest then
+                requestFallingStarBoost()
+                nextRequest = now + math.max(5, getNumberOption("FallingStarRequestIntervalSeconds", 60))
+            end
+
+            if Toggles.ToggleAutoCollectFallingStars and Toggles.ToggleAutoCollectFallingStars.Value then
+                collectFallingStars()
+            end
+
+            task.wait(math.max(0.25, getNumberOption("FallingStarScanIntervalMs", 750) / 1000))
+        end
+    end)
+end
+
+local function refreshFallingStarAutomation()
+    if (Toggles.ToggleAutoFallingStars and Toggles.ToggleAutoFallingStars.Value)
+        or (Toggles.ToggleAutoCollectFallingStars and Toggles.ToggleAutoCollectFallingStars.Value) then
+        startFallingStarAutomation()
+    else
+        stopFallingStarAutomation()
+    end
 end
 
 local function fireGodlyOrbClaim(count, delaySeconds)
@@ -1070,6 +1365,71 @@ DropBoostBox:AddCheckbox("ToggleAutoCrate", {
     Default = false,
 })
 
+local FallingStarBox = Tabs.Main:AddRightGroupbox("Falling Stars", "star")
+FallingStarBox:AddSlider("FallingStarRequestIntervalSeconds", {
+    Text = "Machine Interval",
+    Min = 5,
+    Max = 600,
+    Default = 60,
+    Rounding = 0,
+    Suffix = " s",
+})
+FallingStarBox:AddSlider("FallingStarScanIntervalMs", {
+    Text = "Scan Delay",
+    Min = 250,
+    Max = 5000,
+    Default = 750,
+    Rounding = 0,
+    Suffix = " ms",
+})
+FallingStarBox:AddSlider("FallingStarEventDelayMs", {
+    Text = "Event Wait",
+    Min = 0,
+    Max = 5000,
+    Default = 1500,
+    Rounding = 0,
+    Suffix = " ms",
+})
+FallingStarBox:AddSlider("FallingStarTouchHoldMs", {
+    Text = "Touch Hold",
+    Min = 50,
+    Max = 2000,
+    Default = 250,
+    Rounding = 0,
+    Suffix = " ms",
+})
+FallingStarBox:AddSlider("FallingStarMaxTouchCount", {
+    Text = "Touch Limit",
+    Min = 1,
+    Max = 25,
+    Default = 8,
+    Rounding = 0,
+    Suffix = " stars",
+})
+FallingStarBox:AddButton({
+    Text = "Max Falling Star Boost",
+    Func = function()
+        task.spawn(function()
+            startFallingStarListeners()
+            local requested = requestFallingStarBoost()
+            local touched = collectFallingStars()
+            notify("Falling star request: " .. tostring(requested) .. " | touched: " .. tostring(touched))
+        end)
+    end,
+})
+FallingStarBox:AddCheckbox("ToggleAutoFallingStars", {
+    Text = "Auto Start Machine",
+    Default = false,
+})
+FallingStarBox:AddCheckbox("ToggleAutoCollectFallingStars", {
+    Text = "Auto Collect Stars",
+    Default = true,
+})
+FallingStarBox:AddCheckbox("ToggleFallingStarReturn", {
+    Text = "Return After Touch",
+    Default = true,
+})
+
 local OrbBox = Tabs.Main:AddLeftGroupbox("Godly Orb", "sparkles")
 OrbBox:AddSlider("GodlyOrbClaimDelayMs", {
     Text = "Orb Claim Delay",
@@ -1221,6 +1581,12 @@ Toggles.ToggleAutoCrate:OnChanged(function(state)
         stopTask("AutoCrate")
     end
 end)
+Toggles.ToggleAutoFallingStars:OnChanged(function()
+    refreshFallingStarAutomation()
+end)
+Toggles.ToggleAutoCollectFallingStars:OnChanged(function()
+    refreshFallingStarAutomation()
+end)
 Toggles.ToggleAutoGemStorm:OnChanged(function(state)
     if state then
         startGemStormLoop()
@@ -1332,6 +1698,9 @@ if Toggles.ToggleAutoPlinko.Value then
 end
 if Toggles.ToggleAutoCrate.Value then
     startAutoCrateLoop()
+end
+if Toggles.ToggleAutoFallingStars.Value or Toggles.ToggleAutoCollectFallingStars.Value then
+    startFallingStarAutomation()
 end
 if Toggles.ToggleAutoGemStorm.Value then
     startGemStormLoop()
