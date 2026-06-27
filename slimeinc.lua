@@ -1732,10 +1732,12 @@ Extra.BlessingDefinitions = {
     { key = "GodlySlimeChance", label = "Godly Slime Chance", progressionKey = "godlySlimeChance", rarity = "Mythic" },
 }
 Extra.BlessingByKey = {}
+Extra.BlessingByLabel = {}
 Extra.BlessingLabels = {}
 Extra.BlessingRarityRank = { Basic = 1, Legendary = 2, Mythic = 3 }
 for _, definition in ipairs(Extra.BlessingDefinitions) do
     Extra.BlessingByKey[definition.key] = definition
+    Extra.BlessingByLabel[definition.label] = definition
     Extra.BlessingLabels[#Extra.BlessingLabels + 1] = definition.label
 end
 
@@ -1805,6 +1807,40 @@ function Extra.setBlessingStatus(message)
     end
 end
 
+function Extra.setBlessingPriorityStatus()
+    local order = Extra.BlessingPickPriority or {}
+    local text = #order > 0 and ("Priority: " .. table.concat(order, " > ")) or "Priority: Random"
+    Marker:SetAttribute("BlessingPickPriority", text)
+    if Extra.BlessingPriorityLabel then
+        pcall(function()
+            Extra.BlessingPriorityLabel:SetText(text)
+        end)
+    end
+end
+
+function Extra.syncBlessingPickPriority(selection)
+    selection = typeof(selection) == "table" and selection or {}
+    local nextOrder = {}
+    local included = {}
+
+    for _, label in ipairs(Extra.BlessingPickPriority or {}) do
+        if multiSelectionContains(selection, label) then
+            nextOrder[#nextOrder + 1] = label
+            included[label] = true
+        end
+    end
+
+    for _, label in ipairs(Extra.BlessingLabels) do
+        if not included[label] and multiSelectionContains(selection, label) then
+            nextOrder[#nextOrder + 1] = label
+            included[label] = true
+        end
+    end
+
+    Extra.BlessingPickPriority = nextOrder
+    Extra.setBlessingPriorityStatus()
+end
+
 function Extra.blessingRuleSelected(optionId, definition)
     local option = Options[optionId]
     return option and multiSelectionContains(option.Value, definition.label) or false
@@ -1840,8 +1876,8 @@ function Extra.bestBlessingOption(options)
         return nil
     end
 
-    local bestKey = nil
-    local bestScore = -math.huge
+    local offered = {}
+    local offeredByLabel = {}
     for index, value in pairs(options) do
         local key = Extra.blessingOptionName(value)
         if not key and value == true then
@@ -1850,20 +1886,21 @@ function Extra.bestBlessingOption(options)
 
         local definition = key and Extra.BlessingByKey[key] or nil
         if definition then
-            local score = (Extra.BlessingRarityRank[definition.rarity] or 0) * 100
-            if Extra.blessingIsBlacklisted(definition) then
-                score += 10000
-            elseif not Extra.blessingIsWhitelisted(definition) then
-                score += 5000
-            end
-
-            if score > bestScore then
-                bestScore = score
-                bestKey = key
-            end
+            offered[#offered + 1] = key
+            offeredByLabel[definition.label] = key
         end
     end
-    return bestKey
+
+    for _, label in ipairs(Extra.BlessingPickPriority or {}) do
+        if offeredByLabel[label] then
+            return offeredByLabel[label]
+        end
+    end
+
+    if #offered < 1 then
+        return nil
+    end
+    return offered[math.random(1, #offered)]
 end
 
 function Extra.findSacrificialBlessing(profile)
@@ -2664,8 +2701,7 @@ function Extra.setCleanbotStatus(message)
 end
 
 function Extra.cleanbotAutoRollEnabled()
-    return (Toggles.ToggleAutoCleanbotRoll and Toggles.ToggleAutoCleanbotRoll.Value)
-        or (Toggles.ToggleAutoBestCleanbot and Toggles.ToggleAutoBestCleanbot.Value)
+    return Toggles.ToggleAutoCleanbotRoll and Toggles.ToggleAutoCleanbotRoll.Value or false
 end
 
 function Extra.equipCleanbot(cleanbot)
@@ -2698,17 +2734,23 @@ local function startCleanbotResultListener()
 
         local autoBest = Toggles.ToggleAutoBestCleanbot and Toggles.ToggleAutoBestCleanbot.Value
         if autoBest and cleanbot == "HugeRoomba" then
+            Extra.BestCleanbotRank = 2
             Extra.equipCleanbot("HugeRoomba")
-            Extra.setCleanbotStatus("Huge Cleanbot found and equipped. Auto Best stopped.")
-            task.defer(function()
-                if Toggles.ToggleAutoBestCleanbot then
-                    Toggles.ToggleAutoBestCleanbot:SetValue(false)
-                end
-            end)
-            return
+            Extra.setCleanbotStatus("Huge Cleanbot found and equipped.")
         elseif autoBest and cleanbot == "VoidRoomba" then
-            Extra.equipCleanbot("VoidRoomba")
-            Extra.setCleanbotStatus("Void Cleanbot equipped. Still rolling for Huge.")
+            local profile = getProfileData()
+            local owned = profile and profile.roombas
+            local ownsHuge = Extra.BestCleanbotRank == 2
+                or (typeof(owned) == "table" and owned.hugeRoomba == true)
+            if not ownsHuge then
+                Extra.BestCleanbotRank = 1
+                Extra.equipCleanbot("VoidRoomba")
+                Extra.setCleanbotStatus("Void Cleanbot equipped.")
+            else
+                Extra.setCleanbotStatus("Void rolled; keeping Huge equipped.")
+            end
+        elseif autoBest then
+            Extra.setCleanbotStatus("Rolled " .. tostring(cleanbot) .. "; keeping the best owned Cleanbot.")
         else
             Extra.setCleanbotStatus("Rolled " .. tostring(cleanbot) .. ".")
         end
@@ -2833,26 +2875,27 @@ local function startAutoCleanbotLoop()
 end
 
 function Extra.startAutoBestCleanbot()
+    if not startCleanbotResultListener() then
+        return
+    end
+
     local profile = getProfileData()
     local owned = profile and profile.roombas
     if typeof(owned) == "table" and owned.hugeRoomba == true then
+        Extra.BestCleanbotRank = 2
         Extra.equipCleanbot("HugeRoomba")
         Extra.setCleanbotStatus("Huge Cleanbot was already owned and is now equipped.")
-        task.defer(function()
-            if Toggles.ToggleAutoBestCleanbot then
-                Toggles.ToggleAutoBestCleanbot:SetValue(false)
-            end
-        end)
         return
     end
 
     if typeof(owned) == "table" and owned.voidRoomba == true then
+        Extra.BestCleanbotRank = 1
         Extra.equipCleanbot("VoidRoomba")
-        Extra.setCleanbotStatus("Void Cleanbot equipped. Rolling for Huge.")
+        Extra.setCleanbotStatus("Void Cleanbot was already owned and is now equipped.")
     else
-        Extra.setCleanbotStatus("Rolling for Void or Huge Cleanbot...")
+        Extra.BestCleanbotRank = 0
+        Extra.setCleanbotStatus("Watching Cleanbot rolls for Void or Huge.")
     end
-    startAutoCleanbotLoop()
 end
 
 local function startGemAutoCollect()
@@ -3026,6 +3069,24 @@ end
 
 do
 local AutoBlessingBox = Tabs.Blessings:AddRightGroupbox("Auto Blessing", "sparkles")
+AutoBlessingBox:AddDropdown("BlessingPickPriority", {
+    Text = "Pick Priority",
+    Values = Extra.BlessingLabels,
+    Multi = true,
+    AllowNull = true,
+    Default = {},
+    Callback = Extra.syncBlessingPickPriority,
+})
+AutoBlessingBox:AddButton({
+    Text = "Clear Pick Priority",
+    Func = function()
+        Options.BlessingPickPriority:SetValue({})
+    end,
+})
+Extra.BlessingPriorityLabel = AutoBlessingBox:AddLabel({
+    Text = "Priority: Random",
+    DoesWrap = true,
+})
 AutoBlessingBox:AddCheckbox("ToggleAutoBlessing", {
     Text = "Auto Roll and Improve",
     Default = false,
@@ -3340,7 +3401,7 @@ CleanbotBox:AddCheckbox("ToggleAutoCleanbotRoll", {
     Default = true,
 })
 CleanbotBox:AddCheckbox("ToggleAutoBestCleanbot", {
-    Text = "Auto Best Cleanbot",
+    Text = "Auto Equip Best Cleanbot",
     Default = false,
 })
 Extra.CleanbotStatusLabel = CleanbotBox:AddLabel({
@@ -3521,9 +3582,6 @@ Toggles.ToggleAutoCollectGemStorm:OnChanged(function(state)
 end)
 Toggles.ToggleAutoCleanbotRoll:OnChanged(function(state)
     if state then
-        if Toggles.ToggleAutoBestCleanbot and Toggles.ToggleAutoBestCleanbot.Value then
-            Toggles.ToggleAutoBestCleanbot:SetValue(false)
-        end
         startAutoCleanbotLoop()
     else
         stopTask("AutoCleanbot")
@@ -3531,12 +3589,7 @@ Toggles.ToggleAutoCleanbotRoll:OnChanged(function(state)
 end)
 Toggles.ToggleAutoBestCleanbot:OnChanged(function(state)
     if state then
-        if Toggles.ToggleAutoCleanbotRoll and Toggles.ToggleAutoCleanbotRoll.Value then
-            Toggles.ToggleAutoCleanbotRoll:SetValue(false)
-        end
         Extra.startAutoBestCleanbot()
-    else
-        stopTask("AutoCleanbot")
     end
 end)
 Toggles.ToggleAutoMidasGold:OnChanged(function(state)
@@ -3668,11 +3721,9 @@ if Toggles.ToggleAutoCollectGemStorm.Value then
     startGemAutoCollect()
 end
 if Toggles.ToggleAutoBestCleanbot.Value then
-    if Toggles.ToggleAutoCleanbotRoll.Value then
-        Toggles.ToggleAutoCleanbotRoll:SetValue(false)
-    end
     Extra.startAutoBestCleanbot()
-elseif Toggles.ToggleAutoCleanbotRoll.Value then
+end
+if Toggles.ToggleAutoCleanbotRoll.Value then
     startAutoCleanbotLoop()
 end
 if Toggles.TogglePlayerSpeed.Value then
