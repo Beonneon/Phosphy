@@ -591,6 +591,16 @@ end
 
 local function startFriendBoostLoop()
     stopTask("FriendBoost")
+    disconnect("FriendBoostVisual")
+
+    Connections.FriendBoostVisual = RunService.Heartbeat:Connect(function()
+        if not (Toggles.ToggleAutoFriendBoost and Toggles.ToggleAutoFriendBoost.Value) then
+            disconnect("FriendBoostVisual")
+            return
+        end
+
+        patchFriendBoostUi(math.max(0, math.floor(getNumberOption("FriendBoostCount", 10))))
+    end)
 
     Tasks.FriendBoost = task.spawn(function()
         while Toggles.ToggleAutoFriendBoost and Toggles.ToggleAutoFriendBoost.Value do
@@ -920,6 +930,7 @@ Toggles.ToggleAutoFriendBoost:OnChanged(function(state)
         startFriendBoostLoop()
     else
         stopTask("FriendBoost")
+        disconnect("FriendBoostVisual")
     end
 end)
 Options.CollectorRadius:OnChanged(function()
