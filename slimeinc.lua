@@ -55,9 +55,6 @@ local Session = "phosphy-slime-" .. tostring(os.clock())
 local Tasks = {}
 local Connections = {}
 local LastSentAt = {}
-local CorruptedSlimeIds = {}
-local FirstCorruptedSlimeId = nil
-local LegacyCorruptedSlimeId = nil
 local SpeedHumanoid = nil
 local OriginalWalkSpeed = nil
 
@@ -117,64 +114,20 @@ local function getCollectSlimesRemote()
     return remotes:FindFirstChild("CollectSlimes") or remotes:WaitForChild("CollectSlimes", 10)
 end
 
-local function getCollectSlimeRemote()
-    local remotes = getRemotes()
-    if not remotes then
-        return nil
-    end
-    return remotes:FindFirstChild("CollectSlime") or remotes:WaitForChild("CollectSlime", 10)
-end
-
-local function getSlimeSpawnedRemote()
-    local remotes = getRemotes()
-    if not remotes then
-        return nil
-    end
-    return remotes:FindFirstChild("SlimeSpawned") or remotes:WaitForChild("SlimeSpawned", 10)
-end
-
-local function getSlimeSpawnedBatchRemote()
-    local remotes = getRemotes()
-    if not remotes then
-        return nil
-    end
-    return remotes:FindFirstChild("SlimeSpawnedBatch") or remotes:WaitForChild("SlimeSpawnedBatch", 10)
-end
-
-local function getSlimeDespawnedRemote()
-    local remotes = getRemotes()
-    if not remotes then
-        return nil
-    end
-    return remotes:FindFirstChild("SlimeDespawned") or remotes:WaitForChild("SlimeDespawned", 10)
-end
-
-local function getSlimeDespawnedBatchRemote()
-    local remotes = getRemotes()
-    if not remotes then
-        return nil
-    end
-    return remotes:FindFirstChild("SlimeDespawnedBatch") or remotes:WaitForChild("SlimeDespawnedBatch", 10)
-end
-
-local function getLegacyCSlimeEvents()
-    return ReplicatedStorage:FindFirstChild("CSlimeSpawnEvents")
-end
-
-local function getLegacyCSlimeCollectedRemote()
-    local folder = getLegacyCSlimeEvents()
-    if not folder then
-        return nil
-    end
-    return folder:FindFirstChild("SlimeCollected") or folder:WaitForChild("SlimeCollected", 5)
-end
-
 local function getActivateEmpoweredBoostRemote()
     local remotes = getRemotes()
     if not remotes then
         return nil
     end
     return remotes:FindFirstChild("ActivateEmpoweredBoost") or remotes:WaitForChild("ActivateEmpoweredBoost", 10)
+end
+
+local function getUsePotionRemote()
+    local remotes = getRemotes()
+    if not remotes then
+        return nil
+    end
+    return remotes:FindFirstChild("UsePotion") or remotes:WaitForChild("UsePotion", 10)
 end
 
 local function getActivatePlinkoBallRemote()
@@ -496,272 +449,6 @@ local function collectNearbyOnce()
     end
 
     return 0
-end
-
-local function setFirstCorruptedSlimeId()
-    FirstCorruptedSlimeId = nil
-    local count = 0
-
-    for id in pairs(CorruptedSlimeIds) do
-        count += 1
-        if not FirstCorruptedSlimeId then
-            FirstCorruptedSlimeId = id
-        end
-    end
-
-    Marker:SetAttribute("FirstCorruptedSlimeId", FirstCorruptedSlimeId or "")
-    Marker:SetAttribute("CorruptedSlimeIdCount", count)
-end
-
-local function addCorruptedSlimeId(id)
-    if typeof(id) ~= "string" and typeof(id) ~= "number" then
-        return false
-    end
-
-    id = tostring(id)
-    if id == "" then
-        return false
-    end
-
-    CorruptedSlimeIds[id] = true
-    if not FirstCorruptedSlimeId then
-        FirstCorruptedSlimeId = id
-    end
-
-    Marker:SetAttribute("FirstCorruptedSlimeId", FirstCorruptedSlimeId or "")
-    Marker:SetAttribute("CorruptedSlimeIdCount", 0)
-    local count = 0
-    for _ in pairs(CorruptedSlimeIds) do
-        count += 1
-    end
-    Marker:SetAttribute("CorruptedSlimeIdCount", count)
-    return true
-end
-
-local function setLegacyCorruptedSlimeId(id)
-    if LegacyCorruptedSlimeId or (typeof(id) ~= "string" and typeof(id) ~= "number") then
-        return false
-    end
-
-    LegacyCorruptedSlimeId = tostring(id)
-    Marker:SetAttribute("LegacyCorruptedSlimeId", LegacyCorruptedSlimeId)
-    addCorruptedSlimeId(LegacyCorruptedSlimeId)
-    return true
-end
-
-local function removeCorruptedSlimeId(id)
-    if typeof(id) ~= "string" and typeof(id) ~= "number" then
-        return
-    end
-
-    id = tostring(id)
-    CorruptedSlimeIds[id] = nil
-    setFirstCorruptedSlimeId()
-end
-
-local function addCorruptedFromSpawn(...)
-    local args = { ... }
-
-    if args[3] == "Corrupted" then
-        return addCorruptedSlimeId(args[1])
-    end
-
-    for _, value in ipairs(args) do
-        if typeof(value) == "Instance" and value:GetAttribute("SlimeRarity") == "Corrupted" then
-            return addCorruptedSlimeId(getSlimeId(value))
-        elseif typeof(value) == "table" and value.rarity == "Corrupted" then
-            return addCorruptedSlimeId(value.id)
-        end
-    end
-
-    return false
-end
-
-local function addCorruptedFromBatch(payloads)
-    if typeof(payloads) ~= "table" then
-        return 0
-    end
-
-    local added = 0
-    for _, payload in pairs(payloads) do
-        if typeof(payload) == "table" and payload.rarity == "Corrupted" and addCorruptedSlimeId(payload.id) then
-            added += 1
-        end
-    end
-
-    return added
-end
-
-local function connectLegacyCorruptedSlimeEvents()
-    if Connections.LegacyCSlimeSpawned then
-        return true
-    end
-
-    local folder = getLegacyCSlimeEvents()
-    local spawnSlime = folder and folder:FindFirstChild("SpawnSlime")
-    if not spawnSlime then
-        Marker:SetAttribute("LegacyCSlimeEventsReady", false)
-        return false
-    end
-
-    Connections.LegacyCSlimeSpawned = spawnSlime.OnClientEvent:Connect(function(_, slimeID)
-        setLegacyCorruptedSlimeId(slimeID)
-    end)
-    Marker:SetAttribute("LegacyCSlimeEventsReady", true)
-    return true
-end
-
-local function startLegacyCorruptedSlimeWatcher()
-    if Connections.LegacyCSlimeSpawned or Tasks.LegacyCSlimeWatcher then
-        return
-    end
-
-    Tasks.LegacyCSlimeWatcher = task.spawn(function()
-        while not Connections.LegacyCSlimeSpawned do
-            if connectLegacyCorruptedSlimeEvents() then
-                break
-            end
-
-            local folder = ReplicatedStorage:WaitForChild("CSlimeSpawnEvents", 5)
-            if folder then
-                connectLegacyCorruptedSlimeEvents()
-            end
-
-            task.wait(2)
-        end
-
-        Tasks.LegacyCSlimeWatcher = nil
-    end)
-end
-
-local function refreshCorruptedSlimeIdsFromWorkspace()
-    local slimes = getSlimesFolder()
-    if not slimes then
-        return 0
-    end
-
-    local added = 0
-    for _, slime in ipairs(slimes:GetChildren()) do
-        if slime:GetAttribute("SlimeRarity") == "Corrupted" and addCorruptedSlimeId(getSlimeId(slime)) then
-            added += 1
-        end
-    end
-
-    return added
-end
-
-local function startCorruptedSlimeTracker()
-    if not connectLegacyCorruptedSlimeEvents() then
-        startLegacyCorruptedSlimeWatcher()
-    end
-
-    if Connections.CorruptedSlimeSpawned then
-        refreshCorruptedSlimeIdsFromWorkspace()
-        return
-    end
-
-    refreshCorruptedSlimeIdsFromWorkspace()
-
-    local spawned = getSlimeSpawnedRemote()
-    if spawned then
-        Connections.CorruptedSlimeSpawned = spawned.OnClientEvent:Connect(function(...)
-            addCorruptedFromSpawn(...)
-        end)
-    end
-
-    local spawnedBatch = getSlimeSpawnedBatchRemote()
-    if spawnedBatch then
-        Connections.CorruptedSlimeSpawnedBatch = spawnedBatch.OnClientEvent:Connect(addCorruptedFromBatch)
-    end
-
-    local despawned = getSlimeDespawnedRemote()
-    if despawned then
-        Connections.CorruptedSlimeDespawned = despawned.OnClientEvent:Connect(removeCorruptedSlimeId)
-    end
-
-    local despawnedBatch = getSlimeDespawnedBatchRemote()
-    if despawnedBatch then
-        Connections.CorruptedSlimeDespawnedBatch = despawnedBatch.OnClientEvent:Connect(function(ids)
-            if typeof(ids) ~= "table" then
-                return
-            end
-
-            for _, id in pairs(ids) do
-                removeCorruptedSlimeId(id)
-            end
-        end)
-    end
-end
-
-local function fireCorruptedSlimeCollect()
-    startCorruptedSlimeTracker()
-
-    if not LegacyCorruptedSlimeId then
-        connectLegacyCorruptedSlimeEvents()
-    end
-
-    local legacyRemote = getLegacyCSlimeCollectedRemote()
-    if legacyRemote and LegacyCorruptedSlimeId then
-        legacyRemote:FireServer(LegacyCorruptedSlimeId)
-        Marker:SetAttribute("CorruptedSlimeLastFireId", LegacyCorruptedSlimeId)
-        Marker:SetAttribute("CorruptedSlimeLastFireCount", 1)
-        Marker:SetAttribute("CorruptedSlimeLastFireRemote", "CSlimeSpawnEvents.SlimeCollected")
-        Marker:SetAttribute("CorruptedSlimeLastFireAt", Workspace:GetServerTimeNow())
-        return true
-    end
-
-    refreshCorruptedSlimeIdsFromWorkspace()
-
-    local ids = {}
-    for id in pairs(CorruptedSlimeIds) do
-        ids[#ids + 1] = id
-        if #ids >= 80 then
-            break
-        end
-    end
-
-    if #ids == 0 then
-        notify("No CS ID yet. Needs area unlocked and one corrupted slime spawned.")
-        return false
-    end
-
-    local remoteName = "CollectSlimes"
-    local remote
-    if #ids == 1 then
-        remoteName = "CollectSlime"
-        remote = getCollectSlimeRemote()
-    else
-        remote = getCollectSlimesRemote()
-    end
-
-    if not remote then
-        notify(remoteName .. " remote was not found.")
-        return false
-    end
-
-    if #ids == 1 then
-        remote:FireServer(ids[1])
-    else
-        remote:FireServer(ids)
-    end
-
-    Marker:SetAttribute("CorruptedSlimeLastFireId", ids[1])
-    Marker:SetAttribute("CorruptedSlimeLastFireCount", #ids)
-    Marker:SetAttribute("CorruptedSlimeLastFireRemote", "Remotes." .. remoteName)
-    Marker:SetAttribute("CorruptedSlimeLastFireAt", Workspace:GetServerTimeNow())
-    return true
-end
-
-local function startCorruptedSlimeLoop()
-    stopTask("CorruptedSlime")
-    startCorruptedSlimeTracker()
-
-    Tasks.CorruptedSlime = task.spawn(function()
-        while Toggles.ToggleAutoCorruptedSlime and Toggles.ToggleAutoCorruptedSlime.Value do
-            fireCorruptedSlimeCollect()
-            task.wait(math.max(0, getNumberOption("CorruptedSlimeIntervalSeconds", 0.1)))
-        end
-    end)
 end
 
 local function fireEmpoweredBoostStack(count, delaySeconds)
@@ -1266,6 +953,15 @@ local AbilityRemotes = {
     { name = "ActivateHolyBeam", toggle = "ToggleAbilityHolyBeam" },
     { name = "ActivateVoid", toggle = "ToggleAbilityVoid" },
     { name = "ActivateLuckyRush", toggle = "ToggleAbilityLuckyRush" },
+    { name = "ActivateAutocollect", toggle = "ToggleAbilityAutocollect" },
+}
+
+local PotionOptions = {
+    { id = "rainbowPotion", toggle = "TogglePotionRainbow" },
+    { id = "energyPotion", toggle = "TogglePotionEnergy" },
+    { id = "godlyPotion", toggle = "TogglePotionGodly" },
+    { id = "amuletLuckPotion", toggle = "TogglePotionAmuletLuck" },
+    { id = "elementalPotion", toggle = "TogglePotionElemental" },
 }
 
 local function fireAbilitiesOnce()
@@ -1291,6 +987,39 @@ local function fireAbilitiesOnce()
     Marker:SetAttribute("AbilitiesLastFired", fired)
     Marker:SetAttribute("AbilitiesLastFireTime", Workspace:GetServerTimeNow())
     return fired
+end
+
+local function fireSelectedPotionsOnce()
+    local remote = getUsePotionRemote()
+    if not remote then
+        notify("UsePotion remote was not found.")
+        return 0
+    end
+
+    local fired = 0
+    for _, potion in ipairs(PotionOptions) do
+        local toggle = Toggles[potion.toggle]
+        if toggle and toggle.Value then
+            remote:FireServer(potion.id)
+            fired += 1
+            task.wait(0.05)
+        end
+    end
+
+    Marker:SetAttribute("PotionsLastFired", fired)
+    Marker:SetAttribute("PotionsLastFireTime", Workspace:GetServerTimeNow())
+    return fired
+end
+
+local function startAutoPotionsLoop()
+    stopTask("AutoPotions")
+
+    Tasks.AutoPotions = task.spawn(function()
+        while Toggles.ToggleAutoPotions and Toggles.ToggleAutoPotions.Value do
+            fireSelectedPotionsOnce()
+            task.wait(math.max(60, getNumberOption("AutoPotionsIntervalSeconds", 300)))
+        end
+    end)
 end
 
 local function startCleanbotResultListener()
@@ -1555,46 +1284,6 @@ CollectorBox:AddButton({
     end,
 })
 
-local CorruptedSlimeBox = Tabs.Main:AddLeftGroupbox("Corrupted Slime", "skull")
-CorruptedSlimeBox:AddLabel({
-    Text = "Needs area unlocked and one corrupted slime spawned.",
-    DoesWrap = true,
-})
-CorruptedSlimeBox:AddSlider("CorruptedSlimeIntervalSeconds", {
-    Text = "CS Loop Interval",
-    Min = 0,
-    Max = 1,
-    Default = 0.1,
-    Rounding = 2,
-    Suffix = " s",
-})
-CorruptedSlimeBox:AddButton({
-    Text = "Refresh CS ID",
-    Func = function()
-        startCorruptedSlimeTracker()
-        local added = refreshCorruptedSlimeIdsFromWorkspace()
-        notify("CS id: " .. tostring(FirstCorruptedSlimeId or "none") .. " | refreshed: " .. tostring(added))
-    end,
-})
-CorruptedSlimeBox:AddButton({
-    Text = "Fire CS Once",
-    Func = function()
-        notify("CS collect fired: " .. tostring(fireCorruptedSlimeCollect()))
-    end,
-})
-CorruptedSlimeBox:AddButton({
-    Text = "Start CS Loop",
-    Func = function()
-        Toggles.ToggleAutoCorruptedSlime:SetValue(true)
-        startCorruptedSlimeLoop()
-        notify("CS loop started.")
-    end,
-})
-CorruptedSlimeBox:AddCheckbox("ToggleAutoCorruptedSlime", {
-    Text = "Auto CS Loop",
-    Default = false,
-})
-
 local BeamBoostBox = Tabs.Main:AddRightGroupbox("Beam Boost", "zap")
 BeamBoostBox:AddSlider("BeamBoostCount", {
     Text = "Max Fire Count",
@@ -1669,6 +1358,52 @@ AbilityBox:AddCheckbox("ToggleAbilityVoid", {
 AbilityBox:AddCheckbox("ToggleAbilityLuckyRush", {
     Text = "Use Lucky Rush",
     Default = true,
+})
+AbilityBox:AddCheckbox("ToggleAbilityAutocollect", {
+    Text = "Use Autocollect",
+    Default = false,
+})
+
+local PotionBox = Tabs.Main:AddRightGroupbox("Potions", "flask-conical")
+PotionBox:AddSlider("AutoPotionsIntervalSeconds", {
+    Text = "Potion Interval",
+    Min = 60,
+    Max = 1800,
+    Default = 300,
+    Rounding = 0,
+    Suffix = " s",
+})
+PotionBox:AddButton({
+    Text = "Use Selected Potions",
+    Func = function()
+        task.spawn(function()
+            notify("Potions fired: " .. tostring(fireSelectedPotionsOnce()))
+        end)
+    end,
+})
+PotionBox:AddCheckbox("ToggleAutoPotions", {
+    Text = "Auto Potions",
+    Default = false,
+})
+PotionBox:AddCheckbox("TogglePotionRainbow", {
+    Text = "Rainbow Potion",
+    Default = true,
+})
+PotionBox:AddCheckbox("TogglePotionEnergy", {
+    Text = "Energy Potion",
+    Default = false,
+})
+PotionBox:AddCheckbox("TogglePotionGodly", {
+    Text = "Godly Potion",
+    Default = false,
+})
+PotionBox:AddCheckbox("TogglePotionAmuletLuck", {
+    Text = "Amulet Luck Potion",
+    Default = false,
+})
+PotionBox:AddCheckbox("TogglePotionElemental", {
+    Text = "Elemental Potion",
+    Default = false,
 })
 
 local DropBoostBox = Tabs.Main:AddRightGroupbox("Plinko / Crates", "gift")
@@ -1907,13 +1642,6 @@ Toggles.ToggleActualRing:OnChanged(function()
 end)
 
 Toggles.ToggleCollectAll:OnChanged(updateMarker)
-Toggles.ToggleAutoCorruptedSlime:OnChanged(function(state)
-    if state then
-        startCorruptedSlimeLoop()
-    else
-        stopTask("CorruptedSlime")
-    end
-end)
 Toggles.ToggleAutoBeamBoost:OnChanged(function(state)
     if state then
         startBeamBoostLoop()
@@ -1926,6 +1654,13 @@ Toggles.ToggleAutoAbilities:OnChanged(function(state)
         startAutoAbilitiesLoop()
     else
         stopTask("AutoAbilities")
+    end
+end)
+Toggles.ToggleAutoPotions:OnChanged(function(state)
+    if state then
+        startAutoPotionsLoop()
+    else
+        stopTask("AutoPotions")
     end
 end)
 Toggles.ToggleAutoGodlyOrb:OnChanged(function(state)
@@ -2055,15 +1790,14 @@ startRingVisual()
 if Toggles.ToggleHugeCollector.Value then
     startCollector()
 end
-startCorruptedSlimeTracker()
-if Toggles.ToggleAutoCorruptedSlime.Value then
-    startCorruptedSlimeLoop()
-end
 if Toggles.ToggleAutoGodlyOrb.Value then
     startGodlyOrbLoop()
 end
 if Toggles.ToggleAutoAbilities.Value then
     startAutoAbilitiesLoop()
+end
+if Toggles.ToggleAutoPotions.Value then
+    startAutoPotionsLoop()
 end
 if Toggles.ToggleAutoPlinko.Value then
     startAutoPlinkoLoop()
