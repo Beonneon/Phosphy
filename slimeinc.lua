@@ -1845,6 +1845,29 @@ function Extra.syncBlessingPickPriority(selection)
     Extra.setBlessingPriorityStatus()
 end
 
+function Extra.restoreBlessingPickPriority(savedOrder)
+    if typeof(savedOrder) ~= "table" then
+        return
+    end
+
+    local order = {}
+    local selection = {}
+    for _, label in ipairs(savedOrder) do
+        if typeof(label) == "string" and Extra.BlessingByLabel[label] and not selection[label] then
+            order[#order + 1] = label
+            selection[label] = true
+        end
+    end
+
+    Extra.BlessingPickPriority = order
+    local option = Options.BlessingPickPriority
+    if option then
+        option:SetValue(selection)
+    else
+        Extra.setBlessingPriorityStatus()
+    end
+end
+
 function Extra.blessingRuleSelected(optionId, definition)
     local option = Options[optionId]
     return option and multiSelectionContains(option.Value, definition.label) or false
@@ -3715,6 +3738,17 @@ SaveManager:IgnoreThemeSettings()
 SaveManager:SetIgnoreIndexes({ "MenuKeybind" })
 SaveManager:SetFolder("PhosphyHub/slimeinc")
 SaveManager:SetSubFolder("Collector")
+SaveManager:RegisterCustomData("BlessingPickPriorityOrder", function()
+    local savedOrder = {}
+    for index, label in ipairs(Extra.BlessingPickPriority or {}) do
+        savedOrder[index] = label
+    end
+    return savedOrder
+end, function(savedOrder)
+    task.delay(0.1, function()
+        Extra.restoreBlessingPickPriority(savedOrder)
+    end)
+end)
 SaveManager:BuildConfigSection(Tabs["UI Settings"])
 SaveManager:LoadAutoloadConfig()
 
