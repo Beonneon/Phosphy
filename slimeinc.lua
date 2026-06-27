@@ -80,6 +80,7 @@ local FallingStarMoveUntil = 0
 local MidasMovePosition = nil
 local MidasMoveUntil = 0
 local MidasLastCollectAt = {}
+local PalCollectionActive = false
 local AutofarmCFrame = CFrame.new(
     -5.32521152,
     4.3090837,
@@ -441,6 +442,10 @@ local function getTotemAreaCFrame()
 end
 
 local function getPriorityMovementTarget()
+    if PalCollectionActive then
+        return nil, "Collecting Pals"
+    end
+
     if FallingStarMovePosition and os.clock() <= FallingStarMoveUntil then
         return CFrame.new(FallingStarMovePosition + Vector3.new(0, 3, 0)), "Falling Star"
     end
@@ -494,6 +499,165 @@ local function startMovementCoordinator()
             Marker:SetAttribute("MovementPriority", mode)
         end
     end)
+end
+
+local PalDefinitions = {
+    { key = "mx6rt", displayName = "mx6rt", path = { "Zones", "Lvl125", "mx6rt" } },
+    { key = "papaBear", displayName = "Papa Bear Candied, Destroyer of Worlds", path = { "Zones", "Lvl125", "Papa Bear Candied, Destroyer of Worlds" } },
+    { key = "pieselo", displayName = "Pieselo", path = { "Zones", "Tier15", "Pieselo" } },
+    { key = "wrkiRvAlaa", displayName = "WRKiRvAlaa", path = { "Zones", "Lvl50", "WRKiRvAlaa" } },
+    { key = "blazdij", displayName = "blazdij", path = { "Zones", "Lvl50", "blazdij" } },
+    { key = "mask", displayName = "Mask", path = { "Zones", "Tier15", "Mask" } },
+    { key = "adi", displayName = "Adi", path = { "Zones", "Lvl75", "Adi" } },
+    { key = "angy", displayName = "Angy", path = { "Zones", "Lvl225", "Angy" } },
+    { key = "bombixa", displayName = "Bombixa", path = { "Map", "Bombixa" } },
+    { key = "czonik", displayName = "Czonik", path = { "Zones", "Tier15", "Czonik" } },
+    { key = "diament", displayName = "Diament", path = { "Zones", "Lvl175", "Diament" } },
+    { key = "dreamless", displayName = "Dreamless", path = { "Zones", "Lvl200", "Dreamless" } },
+    { key = "duckyDMan", displayName = "DuckyDMan", path = { "Zones", "Lvl10", "DuckyDMan" } },
+    { key = "dzej", displayName = "Dzej", path = { "Zones", "Lvl150", "Dzej" } },
+    { key = "kubos", displayName = "Kubos", path = { "Zones", "Lvl5", "Kubos" } },
+    { key = "ni3znajomy", displayName = "Ni3znajomy", path = { "Zones", "Lvl25", "Ni3znajomy" } },
+    { key = "res", displayName = "Res", path = { "Zones", "Lvl175", "Res" } },
+    { key = "sirYStudio", displayName = "SirY_Studio", path = { "Map", "SirY_Studio" } },
+    { key = "voidWisp", displayName = "VoidWisp", path = { "Map", "VoidWisp" } },
+    { key = "yesen2", displayName = "yesen2", path = { "Zones", "Lvl175", "yesen2" } },
+    { key = "bartero111", displayName = "Bartero111" },
+}
+
+local function resolvePalInstance(definition)
+    if definition.key == "bartero111" then
+        local crate = Workspace:FindFirstChild("GoldenSlimeCrate", true)
+        local bartero = crate and crate:FindFirstChild("Bartero111", true)
+        if bartero and (bartero:IsA("BasePart") or bartero:IsA("Model")) then
+            return bartero
+        end
+    end
+
+    local path = definition.path
+    local target = path and Workspace:FindFirstChild(path[1], true) or nil
+    if target then
+        for index = 2, #path do
+            target = target and target:FindFirstChild(path[index]) or nil
+        end
+    end
+
+    if target and (target:IsA("BasePart") or target:IsA("Model")) then
+        return target
+    end
+
+    for _, instance in ipairs(Workspace:GetDescendants()) do
+        if (instance:IsA("BasePart") or instance:IsA("Model"))
+            and (instance.Name == definition.displayName or instance.Name == definition.key)
+            and not instance:GetFullName():find("DisplayPals", 1, true) then
+            return instance
+        end
+    end
+
+    return nil
+end
+
+local function palInstanceCFrame(instance)
+    if instance:IsA("BasePart") then
+        return instance.CFrame
+    end
+    if instance:IsA("Model") then
+        return instance:GetPivot()
+    end
+    return nil
+end
+
+local function applyTemporaryNoclip(states)
+    local character = LocalPlayer.Character
+    if not character then
+        return
+    end
+
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            if states[part] == nil then
+                states[part] = part.CanCollide
+            end
+            part.CanCollide = false
+        end
+    end
+end
+
+local function collectAllPals()
+    if PalCollectionActive then
+        return 0, 0, "Pal collection is already running."
+    end
+
+    local remote = getRemote("PalFound", 10)
+    local root = getRoot()
+    if not remote or not root then
+        return 0, #PalDefinitions, "Pal remote or character root was not found."
+    end
+
+    PalCollectionActive = true
+    local startCFrame = root.CFrame
+    local collisionStates = {}
+    local noclipConnection = RunService.Stepped:Connect(function()
+        applyTemporaryNoclip(collisionStates)
+    end)
+    applyTemporaryNoclip(collisionStates)
+
+    local fired = 0
+    local missing = 0
+    local ok, err = pcall(function()
+        for _, definition in ipairs(PalDefinitions) do
+            local target = resolvePalInstance(definition)
+            local targetCFrame = target and palInstanceCFrame(target) or nil
+            local currentRoot = getRoot()
+
+            if targetCFrame and currentRoot then
+                currentRoot.AssemblyLinearVelocity = Vector3.zero
+                currentRoot.AssemblyAngularVelocity = Vector3.zero
+                currentRoot.CFrame = targetCFrame + Vector3.new(0, 3, 0)
+                task.wait(0.25)
+                remote:FireServer(definition.key)
+                fired += 1
+                task.wait(0.15)
+            else
+                missing += 1
+            end
+        end
+    end)
+
+    noclipConnection:Disconnect()
+    for part, canCollide in pairs(collisionStates) do
+        if part.Parent then
+            part.CanCollide = canCollide
+        end
+    end
+
+    local returnRoot = getRoot()
+    if returnRoot then
+        returnRoot.AssemblyLinearVelocity = Vector3.zero
+        returnRoot.AssemblyAngularVelocity = Vector3.zero
+        returnRoot.CFrame = startCFrame
+    end
+    PalCollectionActive = false
+
+    Marker:SetAttribute("PalsLastFireCount", fired)
+    Marker:SetAttribute("PalsLastMissingCount", missing)
+    Marker:SetAttribute("PalsLastCollectAt", Workspace:GetServerTimeNow())
+
+    if not ok then
+        return fired, missing, tostring(err)
+    end
+    return fired, missing, nil
+end
+
+local function unlockVault()
+    local remote = getRemote("OpenedSafe", 10)
+    if not remote then
+        return false
+    end
+
+    remote:FireServer({ 4, 6, 2, 9 })
+    Marker:SetAttribute("VaultUnlockRequestedAt", Workspace:GetServerTimeNow())
+    return true
 end
 
 local function applyPlayerSpeed()
@@ -2682,6 +2846,27 @@ PlayerBox:AddSlider("PlayerSpeed", {
 PlayerBox:AddCheckbox("TogglePlayerSpeed", {
     Text = "Player Speed",
     Default = false,
+})
+
+local PalVaultBox = Tabs.Main:AddRightGroupbox("Pals / Vault", "key-round")
+PalVaultBox:AddButton({
+    Text = "Collect All Pals",
+    Func = function()
+        task.spawn(function()
+            local fired, missing, err = collectAllPals()
+            if err then
+                notify("Pal route stopped: " .. err)
+            else
+                notify(string.format("Pal route finished: %d fired, %d unavailable.", fired, missing))
+            end
+        end)
+    end,
+})
+PalVaultBox:AddButton({
+    Text = "Unlock Vault (4629)",
+    Func = function()
+        notify(unlockVault() and "Vault unlock request fired." or "OpenedSafe remote was not found.")
+    end,
 })
 
 local InfoBox = Tabs.Main:AddRightGroupbox("Live Tuning", "sliders-horizontal")
