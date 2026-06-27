@@ -68,8 +68,12 @@ local AmuletPickPending = false
 local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
-local CleanbotRollPending = false
-local CleanbotRollSerial = 0
+local Extra = {
+    BlessingActionPending = false,
+    BlessingActionSerial = 0,
+    CleanbotRollPending = false,
+    CleanbotRollSerial = 0,
+}
 local ReadyActionLastFiredAt = {}
 local PotionRequestedUntil = {}
 local ActiveBoosts = {}
@@ -175,6 +179,25 @@ local function getProfileData()
     end
 
     return nil
+end
+
+function Extra.getBlessingController()
+    if Extra.BlessingController then
+        return Extra.BlessingController
+    end
+
+    local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts")
+    local client = playerScripts and playerScripts:FindFirstChild("Client")
+    local controllers = client and client:FindFirstChild("Controllers")
+    local module = controllers and controllers:FindFirstChild("BlessingController")
+    if module and module:IsA("ModuleScript") then
+        local ok, controller = pcall(require, module)
+        if ok and typeof(controller) == "table" then
+            Extra.BlessingController = controller
+        end
+    end
+
+    return Extra.BlessingController
 end
 
 local function applyBoostState(profileOrBoosts)
@@ -414,6 +437,30 @@ local function getHumanoid()
     return character:FindFirstChildOfClass("Humanoid")
 end
 
+function Extra.instanceCFrame(value)
+    if typeof(value) == "CFrame" then
+        return value
+    end
+    if typeof(value) == "Vector3" then
+        return CFrame.new(value)
+    end
+    if typeof(value) == "string" then
+        value = Workspace:FindFirstChild(value, true)
+    end
+    if typeof(value) ~= "Instance" or not value.Parent then
+        return nil
+    end
+    if value:IsA("BasePart") then
+        return value.CFrame
+    end
+    if value:IsA("Model") then
+        return value:GetPivot()
+    end
+
+    local part = value:FindFirstChildWhichIsA("BasePart", true)
+    return part and part.CFrame or nil
+end
+
 local function setFallingStarMovementTarget(position, holdSeconds)
     if typeof(position) ~= "Vector3" then
         return
@@ -459,6 +506,10 @@ local function getPriorityMovementTarget()
 
     MidasMovePosition = nil
     MidasMoveUntil = 0
+
+    if Extra.CSlimeMoveCFrame and Toggles.ToggleAutoCSlime and Toggles.ToggleAutoCSlime.Value then
+        return Extra.CSlimeMoveCFrame, "CS Slime"
+    end
 
     local autoFarm = Toggles.ToggleAutoFarm and Toggles.ToggleAutoFarm.Value
     local autoTotem = Toggles.ToggleAutoTotemContact and Toggles.ToggleAutoTotemContact.Value
@@ -1655,6 +1706,39 @@ local function multiSelectionContains(selection, label)
     return false
 end
 
+Extra.BlessingDefinitions = {
+    { key = "SlimeValue", label = "Slime Value", progressionKey = "slimeValue", rarity = "Basic" },
+    { key = "SlimeSpawnRate", label = "Slime Spawn Rate", progressionKey = "slimeSpawnRate", rarity = "Basic" },
+    { key = "ExpMultiplier", label = "EXP Multiplier", progressionKey = "expMultiplier", rarity = "Basic" },
+    { key = "MoreSlimes", label = "More Slimes", progressionKey = "moreSlimes", rarity = "Basic" },
+    { key = "ShinyChance", label = "Shiny Chance", progressionKey = "shinyChance", rarity = "Legendary" },
+    { key = "PlinkoBallBlessing", label = "Plinko Ball Power", progressionKey = "plinkoBall", rarity = "Legendary" },
+    { key = "PlinkoBallCooldownBlessing", label = "Plinko Ball Cooldown", progressionKey = "plinkoBallCooldown", rarity = "Legendary" },
+    { key = "PlinkoBallDurationBlessing", label = "Plinko Ball Duration", progressionKey = "plinkoBallDuration", rarity = "Legendary" },
+    { key = "GemChance", label = "Gem Chance", progressionKey = "gemChance", rarity = "Basic" },
+    { key = "GemValue", label = "Gem Value", progressionKey = "gemValue", rarity = "Basic" },
+    { key = "GemBobCooldownBlessing", label = "Gem Storm Cooldown", progressionKey = "gemBobCooldown", rarity = "Legendary" },
+    { key = "GemBobDurationBlessing", label = "Gem Storm Duration", progressionKey = "gemBobDuration", rarity = "Legendary" },
+    { key = "Fortune", label = "Fortune", progressionKey = "fortune", rarity = "Mythic" },
+    { key = "HugeBeam", label = "Huge Beam", progressionKey = "hugeBeam", rarity = "Mythic" },
+    { key = "GiantSlimeChance", label = "Giant Slime Chance", progressionKey = "giantSlimeChance", rarity = "Legendary" },
+    { key = "TitanicSlimeChance", label = "Titanic Slime Chance", progressionKey = "titanicSlimeChance", rarity = "Legendary" },
+    { key = "CorruptedSlimeValue", label = "Corrupted Slime Value", progressionKey = "corruptedSlimeValue", rarity = "Basic" },
+    { key = "CorruptChance", label = "Corrupt Chance", progressionKey = "corruptChance", rarity = "Legendary" },
+    { key = "CorruptPower", label = "Corrupt Power", progressionKey = "corruptPower", rarity = "Legendary" },
+    { key = "PartyBob", label = "Party Bob", progressionKey = "partyBob", rarity = "Mythic" },
+    { key = "LuckyRushCooldown", label = "Lucky Rush Cooldown", progressionKey = "luckyRushCooldown", rarity = "Legendary" },
+    { key = "AmuletStats", label = "Amulet Stats", progressionKey = "amuletStats", rarity = "Legendary" },
+    { key = "GodlySlimeChance", label = "Godly Slime Chance", progressionKey = "godlySlimeChance", rarity = "Mythic" },
+}
+Extra.BlessingByKey = {}
+Extra.BlessingLabels = {}
+Extra.BlessingRarityRank = { Basic = 1, Legendary = 2, Mythic = 3 }
+for _, definition in ipairs(Extra.BlessingDefinitions) do
+    Extra.BlessingByKey[definition.key] = definition
+    Extra.BlessingLabels[#Extra.BlessingLabels + 1] = definition.label
+end
+
 local function purchaseUpgradeBoard(board)
     local remote = getRemote("PurchaseUpgrade", 10)
     local option = Options[upgradeSelectionId(board)]
@@ -1709,6 +1793,214 @@ local function refreshAutoUpgradeLoop()
     else
         stopTask("AutoUpgrades")
     end
+end
+
+function Extra.setBlessingStatus(message)
+    local text = tostring(message)
+    Marker:SetAttribute("AutoBlessingStatus", text)
+    if Extra.BlessingStatusLabel then
+        pcall(function()
+            Extra.BlessingStatusLabel:SetText(text)
+        end)
+    end
+end
+
+function Extra.blessingRuleSelected(optionId, definition)
+    local option = Options[optionId]
+    return option and multiSelectionContains(option.Value, definition.label) or false
+end
+
+function Extra.blessingIsWhitelisted(definition)
+    return Extra.blessingRuleSelected("BlessingSacrificeWhitelist", definition)
+end
+
+function Extra.blessingIsBlacklisted(definition)
+    return Extra.blessingRuleSelected("BlessingSacrificeBlacklist", definition)
+end
+
+function Extra.blessingOptionName(value)
+    if typeof(value) == "string" then
+        return Extra.BlessingByKey[value] and value or nil
+    end
+    if typeof(value) ~= "table" then
+        return nil
+    end
+
+    for _, field in ipairs({ "key", "name", "id", "blessing" }) do
+        local candidate = value[field]
+        if typeof(candidate) == "string" and Extra.BlessingByKey[candidate] then
+            return candidate
+        end
+    end
+    return nil
+end
+
+function Extra.bestBlessingOption(options)
+    if typeof(options) ~= "table" then
+        return nil
+    end
+
+    local bestKey = nil
+    local bestScore = -math.huge
+    for index, value in pairs(options) do
+        local key = Extra.blessingOptionName(value)
+        if not key and value == true then
+            key = Extra.blessingOptionName(index)
+        end
+
+        local definition = key and Extra.BlessingByKey[key] or nil
+        if definition then
+            local score = (Extra.BlessingRarityRank[definition.rarity] or 0) * 100
+            if Extra.blessingIsBlacklisted(definition) then
+                score += 10000
+            elseif not Extra.blessingIsWhitelisted(definition) then
+                score += 5000
+            end
+
+            if score > bestScore then
+                bestScore = score
+                bestKey = key
+            end
+        end
+    end
+    return bestKey
+end
+
+function Extra.findSacrificialBlessing(profile)
+    local progression = profile and profile.blessingProgression
+    if typeof(progression) ~= "table" then
+        return nil
+    end
+
+    local best = nil
+    local bestRank = math.huge
+    for _, definition in ipairs(Extra.BlessingDefinitions) do
+        local count = tonumber(progression[definition.progressionKey]) or 0
+        if count > 0 and Extra.blessingIsWhitelisted(definition) and not Extra.blessingIsBlacklisted(definition) then
+            local rank = Extra.BlessingRarityRank[definition.rarity] or 0
+            if rank < bestRank then
+                best = definition
+                bestRank = rank
+            end
+        end
+    end
+    return best
+end
+
+function Extra.markBlessingActionPending(timeoutSeconds)
+    Extra.BlessingActionPending = true
+    Extra.BlessingActionSerial += 1
+    local serial = Extra.BlessingActionSerial
+    task.delay(timeoutSeconds or 4, function()
+        if Extra.BlessingActionPending and Extra.BlessingActionSerial == serial then
+            Extra.BlessingActionPending = false
+        end
+    end)
+end
+
+function Extra.connectBlessingEvents()
+    if Connections.BlessingResult then
+        return true
+    end
+
+    local remote = getRemote("BlessingResult", 10)
+    if not remote then
+        notify("BlessingResult remote was not found.")
+        return false
+    end
+
+    Connections.BlessingResult = remote.OnClientEvent:Connect(function(slot, options, success)
+        Extra.BlessingActionPending = false
+        Marker:SetAttribute("BlessingLastSlot", tonumber(slot) or 0)
+        Marker:SetAttribute("BlessingLastResultAt", Workspace:GetServerTimeNow())
+
+        if success and typeof(options) == "table" then
+            Extra.BlessingPendingOptions = options
+            Extra.setBlessingStatus("Blessing options received. Selecting the best safe card...")
+        elseif success then
+            Extra.BlessingPendingOptions = nil
+            Extra.setBlessingStatus("Blessing choice accepted.")
+        else
+            Extra.setBlessingStatus("Blessing request was rejected or unavailable.")
+        end
+    end)
+    return true
+end
+
+function Extra.autoBlessingStep()
+    if Extra.BlessingActionPending then
+        return false
+    end
+
+    local activateRemote = getRemote("ActivateBlessing", 10)
+    local rerollRemote = getRemote("RerollBlessing", 10)
+    if not activateRemote or not rerollRemote or not Extra.connectBlessingEvents() then
+        Extra.setBlessingStatus("Blessing remotes were not found.")
+        return false
+    end
+
+    local options = Extra.BlessingPendingOptions
+    if typeof(options) ~= "table" then
+        local controller = Extra.getBlessingController()
+        if controller and typeof(controller.getPendingOptions) == "function" then
+            local ok, pending = pcall(controller.getPendingOptions)
+            if ok and typeof(pending) == "table" then
+                options = pending
+            end
+        end
+    end
+
+    if typeof(options) == "table" then
+        local choice = Extra.bestBlessingOption(options)
+        if not choice then
+            Extra.setBlessingStatus("No recognized blessing card was offered.")
+            return false
+        end
+
+        Extra.BlessingPendingOptions = nil
+        Extra.markBlessingActionPending(4)
+        activateRemote:FireServer(choice)
+        local definition = Extra.BlessingByKey[choice]
+        Extra.setBlessingStatus("Selecting " .. (definition and definition.label or choice) .. ".")
+        Marker:SetAttribute("BlessingLastChoice", choice)
+        return true
+    end
+
+    local profile = getProfileData()
+    if not profile then
+        Extra.setBlessingStatus("Waiting for profile data...")
+        return false
+    end
+
+    if (tonumber(profile.blessingSlots) or 0) > 0 then
+        Extra.markBlessingActionPending(4)
+        activateRemote:FireServer()
+        Extra.setBlessingStatus("Rolling an available blessing slot...")
+        return true
+    end
+
+    local sacrifice = Extra.findSacrificialBlessing(profile)
+    if sacrifice then
+        Extra.markBlessingActionPending(4)
+        rerollRemote:FireServer(sacrifice.key)
+        Extra.setBlessingStatus("Sacrificing " .. sacrifice.label .. " for a new roll.")
+        Marker:SetAttribute("BlessingLastSacrifice", sacrifice.key)
+        return true
+    end
+
+    Extra.setBlessingStatus("Waiting for a slot or whitelisted owned blessing.")
+    return false
+end
+
+function Extra.startAutoBlessing()
+    stopTask("AutoBlessing")
+    Extra.connectBlessingEvents()
+    Tasks.AutoBlessing = task.spawn(function()
+        while Toggles.ToggleAutoBlessing and Toggles.ToggleAutoBlessing.Value do
+            Extra.autoBlessingStep()
+            task.wait(0.15)
+        end
+    end)
 end
 
 local function fireAbilitiesOnce()
@@ -2279,7 +2571,113 @@ local function startAutoAmuletRoll()
     end)
 end
 
+function Extra.setCSlimeStatus(message)
+    local text = tostring(message)
+    Marker:SetAttribute("CSlimeStatus", text)
+    if Extra.CSlimeStatusLabel then
+        pcall(function()
+            Extra.CSlimeStatusLabel:SetText(text)
+        end)
+    end
+end
+
+function Extra.connectCSlimeSpawnEvent()
+    if Connections.CSlimeSpawn then
+        return true
+    end
+
+    local events = ReplicatedStorage:FindFirstChild("CSlimeSpawnEvents")
+    local spawnRemote = events and events:FindFirstChild("SpawnSlime")
+    if not spawnRemote or not spawnRemote:IsA("RemoteEvent") then
+        return false
+    end
+
+    Connections.CSlimeSpawn = spawnRemote.OnClientEvent:Connect(function(slimeModel, slimeId, respawnPart)
+        Extra.LatestCSlimeModel = slimeModel
+        Extra.LatestCSlimeId = slimeId
+        Extra.LatestCSlimeRespawnPart = respawnPart
+        Marker:SetAttribute("CSlimeLastId", tostring(slimeId))
+        Marker:SetAttribute("CSlimeLastSpawnAt", Workspace:GetServerTimeNow())
+        Extra.setCSlimeStatus("CS slime captured. Teleporting and collecting...")
+    end)
+    Extra.setCSlimeStatus("Waiting for a CS slime to spawn...")
+    return true
+end
+
+function Extra.startAutoCSlime()
+    stopTask("AutoCSlime")
+    disconnect("CSlimeSpawn")
+    Extra.CSlimeMoveCFrame = nil
+    Extra.setCSlimeStatus("Waiting for CSlimeSpawnEvents...")
+
+    Tasks.AutoCSlime = task.spawn(function()
+        while Toggles.ToggleAutoCSlime and Toggles.ToggleAutoCSlime.Value do
+            if not Extra.connectCSlimeSpawnEvent() then
+                task.wait(0.5)
+                continue
+            end
+
+            local events = ReplicatedStorage:FindFirstChild("CSlimeSpawnEvents")
+            local collectRemote = events and events:FindFirstChild("SlimeCollected")
+            local target = Extra.instanceCFrame(Extra.LatestCSlimeModel)
+                or Extra.instanceCFrame(Extra.LatestCSlimeRespawnPart)
+            if Extra.LatestCSlimeId ~= nil and collectRemote and collectRemote:IsA("RemoteEvent") and target then
+                Extra.CSlimeMoveCFrame = target + Vector3.new(0, 3, 0)
+                local root = getRoot()
+                if root then
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                    root.CFrame = Extra.CSlimeMoveCFrame
+                end
+
+                task.wait(0.1)
+                collectRemote:FireServer(Extra.LatestCSlimeId)
+                Marker:SetAttribute("CSlimeLastCollectAt", Workspace:GetServerTimeNow())
+                Extra.setCSlimeStatus("Collecting CS slime " .. tostring(Extra.LatestCSlimeId) .. ".")
+                task.wait(math.max(0.03, getNumberOption("CSlimeCollectDelaySeconds", 1)))
+            else
+                task.wait(0.1)
+            end
+        end
+
+        Extra.CSlimeMoveCFrame = nil
+    end)
+end
+
+function Extra.stopAutoCSlime()
+    stopTask("AutoCSlime")
+    disconnect("CSlimeSpawn")
+    Extra.CSlimeMoveCFrame = nil
+    Extra.setCSlimeStatus("Auto CS slime is off.")
+end
+
 local fireCleanbotRoll
+
+function Extra.setCleanbotStatus(message)
+    local text = tostring(message)
+    Marker:SetAttribute("CleanbotStatus", text)
+    if Extra.CleanbotStatusLabel then
+        pcall(function()
+            Extra.CleanbotStatusLabel:SetText(text)
+        end)
+    end
+end
+
+function Extra.cleanbotAutoRollEnabled()
+    return (Toggles.ToggleAutoCleanbotRoll and Toggles.ToggleAutoCleanbotRoll.Value)
+        or (Toggles.ToggleAutoBestCleanbot and Toggles.ToggleAutoBestCleanbot.Value)
+end
+
+function Extra.equipCleanbot(cleanbot)
+    local remote = getRemote("EquipRoomba", 10)
+    if not remote then
+        return false
+    end
+
+    remote:FireServer(cleanbot)
+    Marker:SetAttribute("CleanbotLastEquipRequest", tostring(cleanbot))
+    return true
+end
 
 local function startCleanbotResultListener()
     if Connections.CleanbotResult then
@@ -2293,14 +2691,31 @@ local function startCleanbotResultListener()
     end
 
     Connections.CleanbotResult = remote.OnClientEvent:Connect(function(cleanbot, isNew)
-        CleanbotRollPending = false
+        Extra.CleanbotRollPending = false
         Marker:SetAttribute("CleanbotLastResult", tostring(cleanbot))
         Marker:SetAttribute("CleanbotLastWasNew", isNew == true)
         Marker:SetAttribute("CleanbotLastResultTime", Workspace:GetServerTimeNow())
 
-        if Toggles.ToggleAutoCleanbotRoll and Toggles.ToggleAutoCleanbotRoll.Value then
+        local autoBest = Toggles.ToggleAutoBestCleanbot and Toggles.ToggleAutoBestCleanbot.Value
+        if autoBest and cleanbot == "HugeRoomba" then
+            Extra.equipCleanbot("HugeRoomba")
+            Extra.setCleanbotStatus("Huge Cleanbot found and equipped. Auto Best stopped.")
+            task.defer(function()
+                if Toggles.ToggleAutoBestCleanbot then
+                    Toggles.ToggleAutoBestCleanbot:SetValue(false)
+                end
+            end)
+            return
+        elseif autoBest and cleanbot == "VoidRoomba" then
+            Extra.equipCleanbot("VoidRoomba")
+            Extra.setCleanbotStatus("Void Cleanbot equipped. Still rolling for Huge.")
+        else
+            Extra.setCleanbotStatus("Rolled " .. tostring(cleanbot) .. ".")
+        end
+
+        if Extra.cleanbotAutoRollEnabled() then
             task.delay(0.05, function()
-                if Toggles.ToggleAutoCleanbotRoll and Toggles.ToggleAutoCleanbotRoll.Value then
+                if Extra.cleanbotAutoRollEnabled() then
                     fireCleanbotRoll()
                 end
             end)
@@ -2310,7 +2725,7 @@ local function startCleanbotResultListener()
 end
 
 fireCleanbotRoll = function()
-    if CleanbotRollPending then
+    if Extra.CleanbotRollPending then
         return false
     end
 
@@ -2320,16 +2735,16 @@ fireCleanbotRoll = function()
         return false
     end
 
-    CleanbotRollPending = true
-    CleanbotRollSerial += 1
-    local serial = CleanbotRollSerial
+    Extra.CleanbotRollPending = true
+    Extra.CleanbotRollSerial += 1
+    local serial = Extra.CleanbotRollSerial
     remote:FireServer()
     Marker:SetAttribute("CleanbotRollLastFire", Workspace:GetServerTimeNow())
 
     task.delay(5, function()
-        if CleanbotRollPending and CleanbotRollSerial == serial then
-            CleanbotRollPending = false
-            if Toggles.ToggleAutoCleanbotRoll and Toggles.ToggleAutoCleanbotRoll.Value then
+        if Extra.CleanbotRollPending and Extra.CleanbotRollSerial == serial then
+            Extra.CleanbotRollPending = false
+            if Extra.cleanbotAutoRollEnabled() then
                 fireCleanbotRoll()
             end
         end
@@ -2417,6 +2832,29 @@ local function startAutoCleanbotLoop()
     end
 end
 
+function Extra.startAutoBestCleanbot()
+    local profile = getProfileData()
+    local owned = profile and profile.roombas
+    if typeof(owned) == "table" and owned.hugeRoomba == true then
+        Extra.equipCleanbot("HugeRoomba")
+        Extra.setCleanbotStatus("Huge Cleanbot was already owned and is now equipped.")
+        task.defer(function()
+            if Toggles.ToggleAutoBestCleanbot then
+                Toggles.ToggleAutoBestCleanbot:SetValue(false)
+            end
+        end)
+        return
+    end
+
+    if typeof(owned) == "table" and owned.voidRoomba == true then
+        Extra.equipCleanbot("VoidRoomba")
+        Extra.setCleanbotStatus("Void Cleanbot equipped. Rolling for Huge.")
+    else
+        Extra.setCleanbotStatus("Rolling for Void or Huge Cleanbot...")
+    end
+    startAutoCleanbotLoop()
+end
+
 local function startGemAutoCollect()
     disconnect("GemBatch")
 
@@ -2494,6 +2932,7 @@ local Window = Library:CreateWindow({
 local Tabs = {
     Main = Window:AddTab("Main", "house"),
     Automation = Window:AddTab("Automation", "bot"),
+    Blessings = Window:AddTab("Blessings", "sparkles"),
     AutoUpgrade = Window:AddTab("Auto Upgrade", "circle-arrow-up"),
     ["UI Settings"] = Window:AddTab("UI Settings", "folder-cog"),
 }
@@ -2553,6 +2992,54 @@ for _, group in ipairs(AutoUpgradeTabboxGroups) do
     for _, index in ipairs(group.indexes) do
         addAutoUpgradeBoardTab(tabbox, AutoUpgradeBoards[index])
     end
+end
+
+do
+local BlessingRulesBox = Tabs.Blessings:AddLeftGroupbox("Sacrifice Rules", "list-checks")
+BlessingRulesBox:AddDropdown("BlessingSacrificeWhitelist", {
+    Text = "Sacrifice Whitelist",
+    Values = Extra.BlessingLabels,
+    Multi = true,
+    AllowNull = true,
+    Default = {},
+})
+BlessingRulesBox:AddDropdown("BlessingSacrificeBlacklist", {
+    Text = "Protected Blacklist",
+    Values = Extra.BlessingLabels,
+    Multi = true,
+    AllowNull = true,
+    Default = {},
+})
+BlessingRulesBox:AddButton({
+    Text = "Clear Whitelist",
+    Func = function()
+        Options.BlessingSacrificeWhitelist:SetValue({})
+    end,
+})
+BlessingRulesBox:AddButton({
+    Text = "Clear Blacklist",
+    Func = function()
+        Options.BlessingSacrificeBlacklist:SetValue({})
+    end,
+})
+end
+
+do
+local AutoBlessingBox = Tabs.Blessings:AddRightGroupbox("Auto Blessing", "sparkles")
+AutoBlessingBox:AddCheckbox("ToggleAutoBlessing", {
+    Text = "Auto Roll and Improve",
+    Default = false,
+})
+AutoBlessingBox:AddButton({
+    Text = "Run One Step",
+    Func = function()
+        notify("Auto blessing step fired: " .. tostring(Extra.autoBlessingStep()))
+    end,
+})
+Extra.BlessingStatusLabel = AutoBlessingBox:AddLabel({
+    Text = "Auto Blessing is off.",
+    DoesWrap = true,
+})
 end
 
 local CollectorBox = Tabs.Main:AddLeftGroupbox("Collector", "magnet")
@@ -2737,6 +3224,26 @@ AmuletStatusLabel = AmuletBox:AddLabel({
     DoesWrap = true,
 })
 
+do
+local CSlimeBox = Tabs.Automation:AddLeftGroupbox("CS Slime", "circle-dot")
+CSlimeBox:AddSlider("CSlimeCollectDelaySeconds", {
+    Text = "Collect Interval",
+    Min = 0,
+    Max = 1,
+    Default = 1,
+    Rounding = 2,
+    Suffix = " s",
+})
+CSlimeBox:AddCheckbox("ToggleAutoCSlime", {
+    Text = "Auto Teleport and Collect",
+    Default = false,
+})
+Extra.CSlimeStatusLabel = CSlimeBox:AddLabel({
+    Text = "Auto CS slime is off.",
+    DoesWrap = true,
+})
+end
+
 local DropBoostBox = Tabs.Automation:AddLeftGroupbox("Plinko / Crates", "gift")
 DropBoostBox:AddSlider("AutoDropBoostIntervalSeconds", {
     Text = "Crate Interval",
@@ -2831,6 +3338,14 @@ CleanbotBox:AddButton({
 CleanbotBox:AddCheckbox("ToggleAutoCleanbotRoll", {
     Text = "Auto Roll Cleanbot",
     Default = true,
+})
+CleanbotBox:AddCheckbox("ToggleAutoBestCleanbot", {
+    Text = "Auto Best Cleanbot",
+    Default = false,
+})
+Extra.CleanbotStatusLabel = CleanbotBox:AddLabel({
+    Text = "Cleanbot automation ready.",
+    DoesWrap = true,
 })
 
 local PlayerBox = Tabs.Main:AddLeftGroupbox("Player", "person-standing")
@@ -2947,6 +3462,22 @@ Toggles.ToggleAutoAmuletRoll:OnChanged(function(state)
         stopTask("AutoAmuletRoll")
     end
 end)
+Toggles.ToggleAutoCSlime:OnChanged(function(state)
+    if state then
+        Extra.startAutoCSlime()
+    else
+        Extra.stopAutoCSlime()
+    end
+end)
+Toggles.ToggleAutoBlessing:OnChanged(function(state)
+    if state then
+        Extra.startAutoBlessing()
+    else
+        stopTask("AutoBlessing")
+        Extra.BlessingActionPending = false
+        Extra.setBlessingStatus("Auto Blessing is off.")
+    end
+end)
 Toggles.ToggleAutoGodlyOrb:OnChanged(function(state)
     if state then
         startGodlyOrbLoop()
@@ -2990,7 +3521,20 @@ Toggles.ToggleAutoCollectGemStorm:OnChanged(function(state)
 end)
 Toggles.ToggleAutoCleanbotRoll:OnChanged(function(state)
     if state then
+        if Toggles.ToggleAutoBestCleanbot and Toggles.ToggleAutoBestCleanbot.Value then
+            Toggles.ToggleAutoBestCleanbot:SetValue(false)
+        end
         startAutoCleanbotLoop()
+    else
+        stopTask("AutoCleanbot")
+    end
+end)
+Toggles.ToggleAutoBestCleanbot:OnChanged(function(state)
+    if state then
+        if Toggles.ToggleAutoCleanbotRoll and Toggles.ToggleAutoCleanbotRoll.Value then
+            Toggles.ToggleAutoCleanbotRoll:SetValue(false)
+        end
+        Extra.startAutoBestCleanbot()
     else
         stopTask("AutoCleanbot")
     end
@@ -3102,6 +3646,12 @@ connectAmuletEvents()
 if Toggles.ToggleAutoAmuletRoll.Value then
     startAutoAmuletRoll()
 end
+if Toggles.ToggleAutoCSlime.Value then
+    Extra.startAutoCSlime()
+end
+if Toggles.ToggleAutoBlessing.Value then
+    Extra.startAutoBlessing()
+end
 if Toggles.ToggleAutoPlinko.Value then
     startAutoPlinkoLoop()
 end
@@ -3117,7 +3667,12 @@ end
 if Toggles.ToggleAutoCollectGemStorm.Value then
     startGemAutoCollect()
 end
-if Toggles.ToggleAutoCleanbotRoll.Value then
+if Toggles.ToggleAutoBestCleanbot.Value then
+    if Toggles.ToggleAutoCleanbotRoll.Value then
+        Toggles.ToggleAutoCleanbotRoll:SetValue(false)
+    end
+    Extra.startAutoBestCleanbot()
+elseif Toggles.ToggleAutoCleanbotRoll.Value then
     startAutoCleanbotLoop()
 end
 if Toggles.TogglePlayerSpeed.Value then
