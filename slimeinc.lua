@@ -66,6 +66,7 @@ local AmuletRollPending = false
 local AmuletChoicePending = false
 local AmuletPickPending = false
 local AmuletStatusLabel = nil
+local FastAmuletsRequested = false
 local DataController = nil
 local CleanbotRollPending = false
 local CleanbotRollSerial = 0
@@ -76,6 +77,8 @@ local BoostStateReady = false
 local BoostStateLastRequestedAt = 0
 local FallingStarMovePosition = nil
 local FallingStarMoveUntil = 0
+local MidasMovePosition = nil
+local MidasMoveUntil = 0
 local MidasLastCollectAt = {}
 local AutofarmCFrame = CFrame.new(
     -5.32521152,
@@ -445,6 +448,13 @@ local function getPriorityMovementTarget()
 
     FallingStarMovePosition = nil
     FallingStarMoveUntil = 0
+
+    if MidasMovePosition and os.clock() <= MidasMoveUntil then
+        return CFrame.new(MidasMovePosition + Vector3.new(0, 3, 0)), "Midas Bar"
+    end
+
+    MidasMovePosition = nil
+    MidasMoveUntil = 0
 
     local autoFarm = Toggles.ToggleAutoFarm and Toggles.ToggleAutoFarm.Value
     local autoTotem = Toggles.ToggleAutoTotemContact and Toggles.ToggleAutoTotemContact.Value
@@ -1137,7 +1147,7 @@ local function fireGodlyOrbClaim(count, delaySeconds)
     return count
 end
 
-local function collectMidasGoldBar(id)
+local function collectMidasGoldBar(id, position)
     if typeof(id) ~= "string" and typeof(id) ~= "number" then
         return false
     end
@@ -1154,7 +1164,36 @@ local function collectMidasGoldBar(id)
         return false
     end
 
-    MidasLastCollectAt[key] = now
+    local targetPosition = payloadToPosition(position)
+    if targetPosition then
+        MidasMovePosition = targetPosition
+        MidasMoveUntil = os.clock() + 5
+
+        local deadline = os.clock() + 5
+        while FallingStarMovePosition and os.clock() <= FallingStarMoveUntil and os.clock() < deadline do
+            task.wait(0.05)
+        end
+
+        if FallingStarMovePosition and os.clock() <= FallingStarMoveUntil then
+            return false
+        end
+
+        MidasMoveUntil = os.clock() + 0.8
+
+        local root = getRoot()
+        if root then
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            root.CFrame = CFrame.new(targetPosition + Vector3.new(0, 3, 0))
+        end
+
+        task.wait(0.2)
+        if FallingStarMovePosition and os.clock() <= FallingStarMoveUntil then
+            return false
+        end
+    end
+
+    MidasLastCollectAt[key] = os.clock()
     remote:FireServer(id)
     Marker:SetAttribute("MidasLastGoldBarId", key)
     Marker:SetAttribute("MidasLastGoldBarCollectAt", Workspace:GetServerTimeNow())
@@ -1164,10 +1203,10 @@ end
 local function connectMidasGoldEvents()
     local spawned = getRemote("GoldBarSpawned", 10)
     if spawned and not Connections.MidasGoldBarSpawned then
-        Connections.MidasGoldBarSpawned = spawned.OnClientEvent:Connect(function(id)
+        Connections.MidasGoldBarSpawned = spawned.OnClientEvent:Connect(function(id, position)
             Marker:SetAttribute("MidasLastGoldBarSpawnedAt", Workspace:GetServerTimeNow())
             if Toggles.ToggleAutoMidasGold and Toggles.ToggleAutoMidasGold.Value then
-                task.defer(collectMidasGoldBar, id)
+                task.spawn(collectMidasGoldBar, id, position)
             end
         end)
     end
@@ -1385,18 +1424,6 @@ local function rememberTotemId(id)
     return true
 end
 
-local function requestTotemSchedule()
-    local remote = getRemote("RequestTotemSchedule", 10)
-    if not remote then
-        notify("RequestTotemSchedule remote was not found.")
-        return false
-    end
-
-    remote:FireServer()
-    Marker:SetAttribute("TotemScheduleRequestedAt", Workspace:GetServerTimeNow())
-    return true
-end
-
 local function claimTotemId(id, inside)
     local remote = getRemote("TotemContactChanged", 10)
     if not remote then
@@ -1437,31 +1464,6 @@ local function connectTotemEvents()
         end)
     end
 
-    local scheduled = getRemote("TotemSpawnScheduled", 10)
-    if scheduled and not Connections.TotemSpawnScheduled then
-        Connections.TotemSpawnScheduled = scheduled.OnClientEvent:Connect(function(spawnAt, scheduledTotems)
-            if typeof(scheduledTotems) ~= "table" then
-                return
-            end
-
-            local delaySeconds = 0
-            if typeof(spawnAt) == "number" then
-                delaySeconds = math.max(0, spawnAt - Workspace:GetServerTimeNow()) + 0.25
-            end
-
-            for _, totem in pairs(scheduledTotems) do
-                if typeof(totem) == "table" and rememberTotemId(totem.id) then
-                    local id = tostring(totem.id)
-                    task.delay(delaySeconds, function()
-                        if Toggles.ToggleAutoTotemContact and Toggles.ToggleAutoTotemContact.Value then
-                            claimTotemId(id, true)
-                        end
-                    end)
-                end
-            end
-        end)
-    end
-
     local cleared = getRemote("TotemCleared", 10)
     if cleared and not Connections.TotemCleared then
         Connections.TotemCleared = cleared.OnClientEvent:Connect(function(id)
@@ -1474,17 +1476,8 @@ local function connectTotemEvents()
 end
 
 local function startAutoTotemContact()
-    stopTask("AutoTotemContact")
     connectTotemEvents()
-    requestTotemSchedule()
-
-    Tasks.AutoTotemContact = task.spawn(function()
-        while Toggles.ToggleAutoTotemContact and Toggles.ToggleAutoTotemContact.Value do
-            requestTotemSchedule()
-            claimKnownTotems()
-            task.wait(math.max(5, getNumberOption("TotemContactIntervalSeconds", 10)))
-        end
-    end)
+    claimKnownTotems()
 end
 
 local AmuletCountValues = { "1", "2", "3", "4" }
@@ -1740,7 +1733,24 @@ local function summarizeAmuletRoll(options, rollId, target, targetIndex)
     return table.concat(lines, "\n")
 end
 
+local function enableFastAmulets()
+    if FastAmuletsRequested then
+        return true
+    end
+
+    local remote = getRemote("UpdateSetting", 10)
+    if not remote then
+        return false
+    end
+
+    FastAmuletsRequested = true
+    remote:FireServer("fastAmulets", true)
+    Marker:SetAttribute("FastAmuletsRequested", true)
+    return true
+end
+
 pickLatestAmulet = function(choice, quiet)
+    enableFastAmulets()
     local remote = getRemote("PickAmulet", 10)
     if not remote then
         notify("PickAmulet remote was not found.")
@@ -1771,7 +1781,7 @@ pickLatestAmulet = function(choice, quiet)
         notify("Amulet pick fired: " .. tostring(choice))
     end
 
-    task.delay(3, function()
+    task.delay(0.35, function()
         AmuletPickPending = false
     end)
 
@@ -1812,7 +1822,7 @@ local function connectAmuletEvents()
             end
 
             if Toggles.ToggleAutoAmuletRoll and Toggles.ToggleAutoAmuletRoll.Value then
-                task.delay(0.15, function()
+                task.defer(function()
                     if Toggles.ToggleAutoAmuletRoll and Toggles.ToggleAutoAmuletRoll.Value then
                         pickLatestAmulet("OLD", true)
                     end
@@ -1841,6 +1851,7 @@ local function connectAmuletEvents()
 end
 
 rollAmuletOnce = function()
+    enableFastAmulets()
     connectAmuletEvents()
 
     if AmuletRollPending or AmuletChoicePending then
@@ -1858,7 +1869,7 @@ rollAmuletOnce = function()
     Marker:SetAttribute("AmuletRolledAt", Workspace:GetServerTimeNow())
     setAmuletStatus("Rolling amulet...")
 
-    task.delay(8, function()
+    task.delay(3, function()
         if AmuletRollPending then
             AmuletRollPending = false
             setAmuletStatus("Amulet roll timed out. Try Roll Once again.")
@@ -1870,6 +1881,7 @@ end
 
 local function startAutoAmuletRoll()
     stopTask("AutoAmuletRoll")
+    enableFastAmulets()
 
     if not hasSelectedAmuletCounts() then
         notify("Select at least one amulet option count first.")
@@ -1885,7 +1897,7 @@ local function startAutoAmuletRoll()
             if not AmuletRollPending then
                 rollAmuletOnce()
             end
-            task.wait(math.max(0.25, getNumberOption("AutoAmuletRollDelayMs", 750) / 1000))
+            task.wait(math.max(0.03, getNumberOption("AutoAmuletRollDelayMs", 50) / 1000))
         end
     end)
 end
@@ -2241,28 +2253,6 @@ PotionBox:AddCheckbox("TogglePotionElemental", {
 })
 
 local TotemBox = Tabs.Automation:AddRightGroupbox("Totems", "badge-plus")
-TotemBox:AddSlider("TotemContactIntervalSeconds", {
-    Text = "Totem Check Interval",
-    Min = 5,
-    Max = 60,
-    Default = 10,
-    Rounding = 0,
-    Suffix = " s",
-})
-TotemBox:AddButton({
-    Text = "Request Totem Schedule",
-    Func = function()
-        connectTotemEvents()
-        notify("Totem schedule requested: " .. tostring(requestTotemSchedule()))
-    end,
-})
-TotemBox:AddButton({
-    Text = "Claim Known Totems",
-    Func = function()
-        connectTotemEvents()
-        notify("Known totems claimed: " .. tostring(claimKnownTotems()))
-    end,
-})
 TotemBox:AddCheckbox("ToggleAutoTotemContact", {
     Text = "Auto Totem Contact",
     Default = false,
@@ -2278,9 +2268,9 @@ AmuletBox:AddDropdown("AmuletOptionCounts", {
 })
 AmuletBox:AddSlider("AutoAmuletRollDelayMs", {
     Text = "Roll Delay",
-    Min = 250,
-    Max = 5000,
-    Default = 750,
+    Min = 0,
+    Max = 500,
+    Default = 50,
     Rounding = 0,
     Suffix = " ms",
 })
@@ -2624,10 +2614,14 @@ SaveManager:LoadAutoloadConfig()
 if Options.CollectorRadius.Value < 5000 then
     Options.CollectorRadius:SetValue(5000)
 end
+if Options.AutoAmuletRollDelayMs.Value > 50 then
+    Options.AutoAmuletRollDelayMs:SetValue(50)
+end
 
 startRingVisual()
 startMovementCoordinator()
 connectMidasGoldEvents()
+enableFastAmulets()
 if Toggles.ToggleHugeCollector.Value then
     startCollector()
 end
