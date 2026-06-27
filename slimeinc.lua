@@ -99,6 +99,22 @@ local function getCrateCollectedRemote()
     return remotes:FindFirstChild("CrateCollected") or remotes:WaitForChild("CrateCollected", 10)
 end
 
+local function getGodlyOrbCollectedRemote()
+    local remotes = getRemotes()
+    if not remotes then
+        return nil
+    end
+    return remotes:FindFirstChild("GodlyOrbCollected") or remotes:WaitForChild("GodlyOrbCollected", 10)
+end
+
+local function getProfileUpdatedRemote()
+    local remotes = getRemotes()
+    if not remotes then
+        return nil
+    end
+    return remotes:FindFirstChild("ProfileUpdated") or remotes:WaitForChild("ProfileUpdated", 10)
+end
+
 local function getSlimesFolder()
     local runtime = Workspace:FindFirstChild("Runtime") or Workspace:WaitForChild("Runtime", 10)
     if not runtime then
@@ -406,6 +422,143 @@ local function fireCrateBoost(kind, count, delaySeconds)
     return count
 end
 
+local function fireGodlyOrbClaim(count, delaySeconds)
+    local remote = getGodlyOrbCollectedRemote()
+    if not remote then
+        notify("GodlyOrbCollected remote was not found.")
+        return 0
+    end
+
+    count = math.max(1, math.floor(tonumber(count) or 1))
+    delaySeconds = math.max(0, tonumber(delaySeconds) or 0)
+
+    for _ = 1, count do
+        remote:FireServer()
+        if delaySeconds > 0 then
+            task.wait(delaySeconds)
+        end
+    end
+
+    return count
+end
+
+local function getClientController(name)
+    local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts")
+    local client = playerScripts and playerScripts:FindFirstChild("Client")
+    local controllers = client and client:FindFirstChild("Controllers")
+    local module = controllers and controllers:FindFirstChild(name)
+
+    if not module or not module:IsA("ModuleScript") then
+        return nil
+    end
+
+    local ok, result = pcall(require, module)
+    if ok then
+        return result
+    end
+
+    return nil
+end
+
+local function formatMultiplier(value)
+    local rounded = math.floor(value * 10 + 0.5) / 10
+    if rounded % 1 == 0 then
+        return tostring(math.floor(rounded))
+    end
+    return string.format("%.1f", rounded)
+end
+
+local function setTextByPath(root, path, text)
+    local current = root
+    for _, name in ipairs(path) do
+        current = current and current:FindFirstChild(name)
+        if not current then
+            return false
+        end
+    end
+
+    if current:IsA("TextLabel") or current:IsA("TextButton") then
+        current.Text = text
+        return true
+    end
+
+    return false
+end
+
+local function patchFriendBoostUi(friendCount)
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if not playerGui then
+        return false
+    end
+
+    local frame = playerGui:FindFirstChild("FriendsBoost", true)
+    if not frame then
+        return false
+    end
+
+    local multiplier = 1 + friendCount * 0.1
+    frame.Visible = friendCount > 0
+    setTextByPath(frame, { "Main", "Stack" }, "x" .. tostring(friendCount))
+    setTextByPath(frame, { "Main", "Hover", "Slimes" }, "x" .. formatMultiplier(multiplier) .. " Slimes Value")
+    setTextByPath(frame, { "Main", "Hover", "Exp" }, "x" .. formatMultiplier(multiplier) .. " Exp")
+    return true
+end
+
+local function fireLocalProfileUpdated(field, value)
+    if typeof(getconnections) ~= "function" then
+        return 0
+    end
+
+    local remote = getProfileUpdatedRemote()
+    if not remote then
+        return 0
+    end
+
+    local ok, connections = pcall(getconnections, remote.OnClientEvent)
+    if not ok or typeof(connections) ~= "table" then
+        return 0
+    end
+
+    local fired = 0
+    for _, connection in ipairs(connections) do
+        local fn = connection.Function
+        if typeof(fn) == "function" and pcall(fn, field, value) then
+            fired += 1
+        elseif typeof(connection.Fire) == "function" and pcall(function()
+            connection:Fire(field, value)
+        end) then
+            fired += 1
+        end
+    end
+
+    return fired
+end
+
+local function setMaxFriendBoost(friendCount)
+    friendCount = math.max(0, math.floor(tonumber(friendCount) or 10))
+
+    local signaled = fireLocalProfileUpdated("friends", friendCount)
+    local profilePatched = signaled > 0
+
+    if not profilePatched then
+        local dataController = getClientController("DataController")
+        if typeof(dataController) == "table" and typeof(dataController.get) == "function" then
+            local ok, profile = pcall(dataController.get)
+            if ok and typeof(profile) == "table" then
+                profile.friends = friendCount
+                profilePatched = true
+            end
+        end
+    end
+
+    local uiPatched = patchFriendBoostUi(friendCount)
+    Marker:SetAttribute("FriendBoostCount", friendCount)
+    Marker:SetAttribute("FriendBoostProfilePatched", profilePatched)
+    Marker:SetAttribute("FriendBoostUiPatched", uiPatched)
+
+    return profilePatched, uiPatched
+end
+
 local function startBeamBoostLoop()
     stopTask("BeamBoost")
 
@@ -421,6 +574,28 @@ local function startBeamBoostLoop()
             end
 
             task.wait(math.max(1, getNumberOption("BeamBoostRefreshSeconds", 25)))
+        end
+    end)
+end
+
+local function startGodlyOrbLoop()
+    stopTask("GodlyOrb")
+
+    Tasks.GodlyOrb = task.spawn(function()
+        while Toggles.ToggleAutoGodlyOrb and Toggles.ToggleAutoGodlyOrb.Value do
+            fireGodlyOrbClaim(1, 0)
+            task.wait(math.max(0.25, getNumberOption("GodlyOrbClaimDelayMs", 1000) / 1000))
+        end
+    end)
+end
+
+local function startFriendBoostLoop()
+    stopTask("FriendBoost")
+
+    Tasks.FriendBoost = task.spawn(function()
+        while Toggles.ToggleAutoFriendBoost and Toggles.ToggleAutoFriendBoost.Value do
+            setMaxFriendBoost(getNumberOption("FriendBoostCount", 10))
+            task.wait(math.max(1, getNumberOption("FriendBoostRefreshSeconds", 5)))
         end
     end)
 end
@@ -641,6 +816,55 @@ DropBoostBox:AddButton({
     end,
 })
 
+local OrbFriendBox = Tabs.Main:AddLeftGroupbox("Orb / Friends", "sparkles")
+OrbFriendBox:AddSlider("GodlyOrbClaimDelayMs", {
+    Text = "Orb Claim Delay",
+    Min = 250,
+    Max = 10000,
+    Default = 1000,
+    Rounding = 0,
+    Suffix = " ms",
+})
+OrbFriendBox:AddButton({
+    Text = "Claim Godly Orb",
+    Func = function()
+        task.spawn(function()
+            notify("Godly orb claim fired: " .. tostring(fireGodlyOrbClaim(1, 0)))
+        end)
+    end,
+})
+OrbFriendBox:AddCheckbox("ToggleAutoGodlyOrb", {
+    Text = "Auto Claim Godly Orb",
+    Default = true,
+})
+OrbFriendBox:AddSlider("FriendBoostCount", {
+    Text = "Friend Boost Count",
+    Min = 0,
+    Max = 100,
+    Default = 10,
+    Rounding = 0,
+    Suffix = " friends",
+})
+OrbFriendBox:AddSlider("FriendBoostRefreshSeconds", {
+    Text = "Friend Refresh",
+    Min = 1,
+    Max = 60,
+    Default = 5,
+    Rounding = 0,
+    Suffix = " s",
+})
+OrbFriendBox:AddButton({
+    Text = "Max Friend Boost",
+    Func = function()
+        local profilePatched, uiPatched = setMaxFriendBoost(getNumberOption("FriendBoostCount", 10))
+        notify("Friend boost set. Profile: " .. tostring(profilePatched) .. " UI: " .. tostring(uiPatched))
+    end,
+})
+OrbFriendBox:AddCheckbox("ToggleAutoFriendBoost", {
+    Text = "Auto Keep Friend Boost",
+    Default = true,
+})
+
 local InfoBox = Tabs.Main:AddRightGroupbox("Live Tuning", "sliders-horizontal")
 InfoBox:AddLabel({
     Text = "Workspace marker: PhosphySlimeCollector",
@@ -684,6 +908,20 @@ Toggles.ToggleAutoBeamBoost:OnChanged(function(state)
         stopTask("BeamBoost")
     end
 end)
+Toggles.ToggleAutoGodlyOrb:OnChanged(function(state)
+    if state then
+        startGodlyOrbLoop()
+    else
+        stopTask("GodlyOrb")
+    end
+end)
+Toggles.ToggleAutoFriendBoost:OnChanged(function(state)
+    if state then
+        startFriendBoostLoop()
+    else
+        stopTask("FriendBoost")
+    end
+end)
 Options.CollectorRadius:OnChanged(function()
     updateMarker()
     resizeActualCollectorRing()
@@ -691,6 +929,11 @@ end)
 Options.CollectorBatchSize:OnChanged(updateMarker)
 Options.CollectorTickMs:OnChanged(updateMarker)
 Options.CollectorRetryMs:OnChanged(updateMarker)
+Options.FriendBoostCount:OnChanged(function()
+    if Toggles.ToggleAutoFriendBoost and Toggles.ToggleAutoFriendBoost.Value then
+        setMaxFriendBoost(getNumberOption("FriendBoostCount", 10))
+    end
+end)
 
 Library:OnUnload(function()
     Marker:SetAttribute("Session", "unloaded-" .. tostring(os.clock()))
@@ -745,6 +988,12 @@ SaveManager:LoadAutoloadConfig()
 startRingVisual()
 if Toggles.ToggleHugeCollector.Value then
     startCollector()
+end
+if Toggles.ToggleAutoGodlyOrb.Value then
+    startGodlyOrbLoop()
+end
+if Toggles.ToggleAutoFriendBoost.Value then
+    startFriendBoostLoop()
 end
 
 notify("slimeinc loaded.")
