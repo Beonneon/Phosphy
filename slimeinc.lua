@@ -58,6 +58,12 @@ local LastSentAt = {}
 local TotemIds = {}
 local SpeedHumanoid = nil
 local OriginalWalkSpeed = nil
+local LatestAmuletRollId = nil
+local LatestAmuletSummary = "No amulet roll yet."
+local LatestAmuletTarget = nil
+local LatestAmuletTargetIndex = nil
+local AmuletRollPending = false
+local AmuletStatusLabel = nil
 
 local Marker = Workspace:FindFirstChild("PhosphySlimeCollector")
 if not Marker then
@@ -1162,72 +1168,373 @@ local function startAutoTotemContact()
     end)
 end
 
-local function isWantedAmulet(amuletType)
-    if amuletType == "GiftAmulet" then
-        return Toggles.TogglePickGiftAmulet and Toggles.TogglePickGiftAmulet.Value
+local AmuletTargetValues = {
+    "GiftAmulet",
+    "SummonerAmulet",
+    "TitanicAmulet",
+    "GodlyAmulet",
+    "VoidAmulet",
+    "StardustAmulet",
+    "HastyAmulet",
+    "LuckyAmulet",
+    "CorruptedAmulet",
+    "SlimesAmulet",
+    "ExpAmulet",
+    "GemsAmulet",
+    "MoveSpeedAmulet",
+    "GiantAmulet",
+    "CorruptChanceAmulet",
+}
+
+local AmuletPreferredFields = {
+    "rarity",
+    "tier",
+    "level",
+    "value",
+    "amount",
+    "multiplier",
+    "slimeMultiplier",
+    "slimesMultiplier",
+    "expMultiplier",
+    "gemsMultiplier",
+    "luckMultiplier",
+    "luck",
+    "speed",
+    "moveSpeed",
+    "cooldown",
+    "duration",
+    "chance",
+}
+
+local rollAmuletOnce
+local pickLatestAmulet
+
+local function setAmuletStatus(text)
+    LatestAmuletSummary = tostring(text or "No amulet roll yet.")
+
+    local markerText = LatestAmuletSummary
+    if #markerText > 1024 then
+        markerText = markerText:sub(1, 1021) .. "..."
     end
 
-    if amuletType == "SummonerAmulet" then
-        return Toggles.TogglePickSummonerAmulet and Toggles.TogglePickSummonerAmulet.Value
+    Marker:SetAttribute("AmuletLatestInfo", markerText)
+
+    if AmuletStatusLabel then
+        pcall(function()
+            AmuletStatusLabel:SetText(LatestAmuletSummary)
+        end)
+    end
+end
+
+local function getSelectedAmuletTargets()
+    local dropdown = Options.AmuletTargets
+    if not dropdown or typeof(dropdown.Value) ~= "table" then
+        return {}
+    end
+
+    return dropdown.Value
+end
+
+local function hasSelectedAmuletTargets()
+    for _, active in pairs(getSelectedAmuletTargets()) do
+        if active then
+            return true
+        end
     end
 
     return false
 end
 
-local function findWantedAmulet(options)
-    if typeof(options) ~= "table" then
-        return nil
+local function isSelectedAmuletTarget(amuletType)
+    if typeof(amuletType) ~= "string" then
+        return false
     end
 
-    for _, option in pairs(options) do
-        if typeof(option) == "table" and isWantedAmulet(option.amuletType) then
-            return option.amuletType
+    return getSelectedAmuletTargets()[amuletType] == true
+end
+
+local function compactAmuletValue(value)
+    local valueType = typeof(value)
+
+    if valueType == "number" then
+        local rounded = math.floor(value * 1000 + 0.5) / 1000
+        if rounded == math.floor(rounded) then
+            return tostring(math.floor(rounded))
         end
+        return tostring(rounded)
+    end
+
+    if valueType == "string" or valueType == "boolean" then
+        return tostring(value)
+    end
+
+    if valueType == "Vector3" then
+        return string.format("%.1f, %.1f, %.1f", value.X, value.Y, value.Z)
+    end
+
+    if valueType == "Color3" then
+        return string.format(
+            "rgb(%d,%d,%d)",
+            math.floor(value.R * 255 + 0.5),
+            math.floor(value.G * 255 + 0.5),
+            math.floor(value.B * 255 + 0.5)
+        )
     end
 
     return nil
 end
 
-local function connectAutoAmuletPick()
-    if Connections.AutoAmuletRoll then
-        return true
-    end
-
-    local rollResult = getRemote("AmuletRollResult", 10)
-    local pickRemote = getRemote("PickAmulet", 10)
-    if not rollResult or not pickRemote then
-        notify("Amulet roll/pick remotes were not found.")
+local function appendAmuletField(parts, used, option, key, label)
+    if used[key] then
         return false
     end
 
-    Connections.AutoAmuletRoll = rollResult.OnClientEvent:Connect(function(options, rollId)
-        if not (Toggles.ToggleAutoPickSpecialAmulets and Toggles.ToggleAutoPickSpecialAmulets.Value) then
-            return
-        end
+    local text = compactAmuletValue(option[key])
+    if not text then
+        return false
+    end
 
-        if typeof(rollId) ~= "number" then
-            return
-        end
+    used[key] = true
+    parts[#parts + 1] = tostring(label or key) .. "=" .. text
+    return true
+end
 
-        local wanted = findWantedAmulet(options)
-        if not wanted then
-            return
-        end
+local function getOptionKeys(option)
+    local keys = {}
+    for key in pairs(option) do
+        keys[#keys + 1] = key
+    end
 
-        task.delay(0.15, function()
-            if Toggles.ToggleAutoPickSpecialAmulets and Toggles.ToggleAutoPickSpecialAmulets.Value then
-                pickRemote:FireServer("NEW", rollId)
-                Marker:SetAttribute("AutoPickedAmulet", wanted)
-                Marker:SetAttribute("AutoPickedAmuletAt", Workspace:GetServerTimeNow())
-            end
-        end)
+    table.sort(keys, function(left, right)
+        return tostring(left) < tostring(right)
     end)
+
+    return keys
+end
+
+local function getAmuletType(option)
+    if typeof(option) ~= "table" then
+        return nil
+    end
+
+    local amuletType = option.amuletType or option.AmuletType or option.type or option.Type or option.name or option.Name
+    if typeof(amuletType) == "string" then
+        return amuletType
+    end
+
+    return nil
+end
+
+local function summarizeAmuletOption(option, index, matched)
+    if typeof(option) ~= "table" then
+        return "[" .. tostring(index) .. "] " .. tostring(option)
+    end
+
+    local amuletType = getAmuletType(option) or "UnknownAmulet"
+    local parts = {
+        "[" .. tostring(index) .. "] " .. amuletType .. (matched and " (TARGET)" or ""),
+    }
+    local used = {
+        amuletType = true,
+        AmuletType = true,
+        type = true,
+        Type = true,
+        name = true,
+        Name = true,
+    }
+
+    for _, key in ipairs(AmuletPreferredFields) do
+        appendAmuletField(parts, used, option, key)
+    end
+
+    local added = 0
+    for _, key in ipairs(getOptionKeys(option)) do
+        if added >= 7 then
+            break
+        end
+
+        if appendAmuletField(parts, used, option, key) then
+            added += 1
+        end
+    end
+
+    for _, key in ipairs(getOptionKeys(option)) do
+        if added >= 10 then
+            break
+        end
+
+        local nested = option[key]
+        if typeof(nested) == "table" then
+            for _, nestedKey in ipairs(getOptionKeys(nested)) do
+                if added >= 10 then
+                    break
+                end
+
+                local text = compactAmuletValue(nested[nestedKey])
+                if text then
+                    parts[#parts + 1] = tostring(key) .. "." .. tostring(nestedKey) .. "=" .. text
+                    added += 1
+                end
+            end
+        end
+    end
+
+    return table.concat(parts, " | ")
+end
+
+local function getOrderedAmuletOptionKeys(options)
+    local keys = {}
+    if typeof(options) ~= "table" then
+        return keys
+    end
+
+    for key in pairs(options) do
+        keys[#keys + 1] = key
+    end
+
+    table.sort(keys, function(left, right)
+        if typeof(left) == "number" and typeof(right) == "number" then
+            return left < right
+        end
+        return tostring(left) < tostring(right)
+    end)
+
+    return keys
+end
+
+local function findSelectedAmuletTarget(options)
+    for _, key in ipairs(getOrderedAmuletOptionKeys(options)) do
+        local option = options[key]
+        local amuletType = getAmuletType(option)
+        if isSelectedAmuletTarget(amuletType) then
+            return amuletType, key
+        end
+    end
+
+    return nil, nil
+end
+
+local function summarizeAmuletRoll(options, rollId, target, targetIndex)
+    local lines = {}
+    if target then
+        lines[#lines + 1] = "Roll " .. tostring(rollId or "?") .. " hit " .. target .. " at option " .. tostring(targetIndex) .. "."
+    else
+        lines[#lines + 1] = "Roll " .. tostring(rollId or "?") .. " had no selected target."
+    end
+
+    if typeof(options) ~= "table" then
+        lines[#lines + 1] = "Payload: " .. tostring(options)
+        return table.concat(lines, "\n")
+    end
+
+    local count = 0
+    for _, key in ipairs(getOrderedAmuletOptionKeys(options)) do
+        count += 1
+        if count <= 4 then
+            lines[#lines + 1] = summarizeAmuletOption(options[key], key, key == targetIndex)
+        end
+    end
+
+    if count == 0 then
+        lines[#lines + 1] = "No new options were sent."
+    elseif count > 4 then
+        lines[#lines + 1] = "+" .. tostring(count - 4) .. " more option(s)"
+    end
+
+    return table.concat(lines, "\n")
+end
+
+pickLatestAmulet = function(choice, quiet)
+    local remote = getRemote("PickAmulet", 10)
+    if not remote then
+        notify("PickAmulet remote was not found.")
+        return false
+    end
+
+    if LatestAmuletRollId == nil then
+        if not quiet then
+            notify("No amulet roll id yet.")
+        end
+        return false
+    end
+
+    remote:FireServer(choice, LatestAmuletRollId)
+    Marker:SetAttribute("AmuletLastPicked", choice)
+    Marker:SetAttribute("AmuletLastPickRollId", tostring(LatestAmuletRollId))
+    Marker:SetAttribute("AmuletLastPickAt", Workspace:GetServerTimeNow())
+
+    if not quiet then
+        notify("Amulet pick fired: " .. tostring(choice))
+    end
 
     return true
 end
 
-local function rollAmuletOnce()
-    connectAutoAmuletPick()
+local function connectAmuletEvents()
+    local rollResult = getRemote("AmuletRollResult", 10)
+    if not rollResult then
+        notify("AmuletRollResult remote was not found.")
+        return false
+    end
+
+    if not Connections.AmuletRollResult then
+        Connections.AmuletRollResult = rollResult.OnClientEvent:Connect(function(options, rollId)
+            AmuletRollPending = false
+            LatestAmuletRollId = rollId
+
+            local target, targetIndex = findSelectedAmuletTarget(options)
+            LatestAmuletTarget = target
+            LatestAmuletTargetIndex = targetIndex
+            setAmuletStatus(summarizeAmuletRoll(options, rollId, target, targetIndex))
+
+            Marker:SetAttribute("AmuletLastRollId", tostring(rollId))
+            Marker:SetAttribute("AmuletLastTarget", target or "")
+            Marker:SetAttribute("AmuletLastTargetIndex", targetIndex and tostring(targetIndex) or "")
+            Marker:SetAttribute("AmuletLastResultAt", Workspace:GetServerTimeNow())
+
+            if target then
+                if Toggles.ToggleAutoAmuletRoll and Toggles.ToggleAutoAmuletRoll.Value then
+                    Toggles.ToggleAutoAmuletRoll:SetValue(false)
+                end
+
+                if Toggles.ToggleAutoPickNewAmulet and Toggles.ToggleAutoPickNewAmulet.Value then
+                    notify("Amulet target hit: " .. target .. ". Auto selecting new.")
+                    task.delay(0.15, function()
+                        pickLatestAmulet("NEW", true)
+                    end)
+                else
+                    notify("Amulet target hit: " .. target .. ". Press Select New to keep it.")
+                end
+                return
+            end
+
+            if Toggles.ToggleAutoAmuletRoll and Toggles.ToggleAutoAmuletRoll.Value then
+                task.delay(0.15, function()
+                    if Toggles.ToggleAutoAmuletRoll and Toggles.ToggleAutoAmuletRoll.Value then
+                        pickLatestAmulet("OLD", true)
+                    end
+                end)
+            end
+        end)
+    end
+
+    local pickResult = getRemote("AmuletPickResult", 2)
+    if pickResult and not Connections.AmuletPickResult then
+        Connections.AmuletPickResult = pickResult.OnClientEvent:Connect(function(ok, message)
+            Marker:SetAttribute("AmuletLastPickResult", tostring(ok))
+            Marker:SetAttribute("AmuletLastPickMessage", tostring(message or ""))
+        end)
+    end
+
+    return true
+end
+
+rollAmuletOnce = function()
+    connectAmuletEvents()
+
+    if AmuletRollPending then
+        return false
+    end
 
     local remote = getRemote("RollAmulet", 10)
     if not remote then
@@ -1235,9 +1542,41 @@ local function rollAmuletOnce()
         return false
     end
 
+    AmuletRollPending = true
     remote:FireServer()
     Marker:SetAttribute("AmuletRolledAt", Workspace:GetServerTimeNow())
+    setAmuletStatus("Rolling amulet...")
+
+    task.delay(8, function()
+        if AmuletRollPending then
+            AmuletRollPending = false
+            setAmuletStatus("Amulet roll timed out. Try Roll Once again.")
+        end
+    end)
+
     return true
+end
+
+local function startAutoAmuletRoll()
+    stopTask("AutoAmuletRoll")
+
+    if not hasSelectedAmuletTargets() then
+        notify("Select at least one amulet target first.")
+        if Toggles.ToggleAutoAmuletRoll then
+            Toggles.ToggleAutoAmuletRoll:SetValue(false)
+        end
+        return
+    end
+
+    connectAmuletEvents()
+    Tasks.AutoAmuletRoll = task.spawn(function()
+        while Toggles.ToggleAutoAmuletRoll and Toggles.ToggleAutoAmuletRoll.Value do
+            if not AmuletRollPending then
+                rollAmuletOnce()
+            end
+            task.wait(math.max(0.25, getNumberOption("AutoAmuletRollDelayMs", 750) / 1000))
+        end
+    end)
 end
 
 local function startCleanbotResultListener()
@@ -1624,7 +1963,7 @@ PotionBox:AddCheckbox("TogglePotionElemental", {
     Default = false,
 })
 
-local TotemBox = Tabs.Main:AddRightGroupbox("Totem / Amulets", "badge-plus")
+local TotemBox = Tabs.Main:AddRightGroupbox("Totems", "badge-plus")
 TotemBox:AddSlider("TotemContactIntervalSeconds", {
     Text = "Totem Check Interval",
     Min = 5,
@@ -1651,23 +1990,53 @@ TotemBox:AddCheckbox("ToggleAutoTotemContact", {
     Text = "Auto Totem Contact",
     Default = false,
 })
-TotemBox:AddButton({
+
+local AmuletBox = Tabs.Main:AddRightGroupbox("Auto Amulet", "gem")
+AmuletBox:AddDropdown("AmuletTargets", {
+    Text = "Stop On",
+    Values = AmuletTargetValues,
+    Multi = true,
+    Searchable = true,
+    AllowNull = true,
+    Default = { "GiftAmulet", "SummonerAmulet" },
+})
+AmuletBox:AddSlider("AutoAmuletRollDelayMs", {
+    Text = "Roll Delay",
+    Min = 250,
+    Max = 5000,
+    Default = 750,
+    Rounding = 0,
+    Suffix = " ms",
+})
+AmuletBox:AddCheckbox("ToggleAutoAmuletRoll", {
+    Text = "Auto Roll Until Target",
+    Default = false,
+})
+AmuletBox:AddCheckbox("ToggleAutoPickNewAmulet", {
+    Text = "Auto Select New On Hit",
+    Default = false,
+})
+AmuletBox:AddButton({
     Text = "Roll Amulet Once",
     Func = function()
         notify("Amulet roll fired: " .. tostring(rollAmuletOnce()))
     end,
 })
-TotemBox:AddCheckbox("ToggleAutoPickSpecialAmulets", {
-    Text = "Auto Pick Special",
-    Default = false,
+AmuletBox:AddButton({
+    Text = "Select New",
+    Func = function()
+        pickLatestAmulet("NEW")
+    end,
 })
-TotemBox:AddCheckbox("TogglePickGiftAmulet", {
-    Text = "Pick Gift Amulet",
-    Default = true,
+AmuletBox:AddButton({
+    Text = "Keep Old",
+    Func = function()
+        pickLatestAmulet("OLD")
+    end,
 })
-TotemBox:AddCheckbox("TogglePickSummonerAmulet", {
-    Text = "Pick Summoner Amulet",
-    Default = true,
+AmuletStatusLabel = AmuletBox:AddLabel({
+    Text = LatestAmuletSummary,
+    DoesWrap = true,
 })
 
 local DropBoostBox = Tabs.Main:AddRightGroupbox("Plinko / Crates", "gift")
@@ -1934,9 +2303,11 @@ Toggles.ToggleAutoTotemContact:OnChanged(function(state)
         stopTask("AutoTotemContact")
     end
 end)
-Toggles.ToggleAutoPickSpecialAmulets:OnChanged(function(state)
+Toggles.ToggleAutoAmuletRoll:OnChanged(function(state)
     if state then
-        connectAutoAmuletPick()
+        startAutoAmuletRoll()
+    else
+        stopTask("AutoAmuletRoll")
     end
 end)
 Toggles.ToggleAutoGodlyOrb:OnChanged(function(state)
@@ -2078,8 +2449,9 @@ end
 if Toggles.ToggleAutoTotemContact.Value then
     startAutoTotemContact()
 end
-if Toggles.ToggleAutoPickSpecialAmulets.Value then
-    connectAutoAmuletPick()
+connectAmuletEvents()
+if Toggles.ToggleAutoAmuletRoll.Value then
+    startAutoAmuletRoll()
 end
 if Toggles.ToggleAutoPlinko.Value then
     startAutoPlinkoLoop()
