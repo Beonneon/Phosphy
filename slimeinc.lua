@@ -1,9 +1,46 @@
-local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
-local PhosphyRepo = "https://raw.githubusercontent.com/Beonneon/Phosphy/refs/heads/main/"
+local DependencyCommit = "9c6d37050aa04c2bf1a3e446d809d316efe94c8e"
 
-local Library = loadstring(game:HttpGet(PhosphyRepo .. "LibraryV3.lua"))()
-local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
-local SaveManager = loadstring(game:HttpGet(PhosphyRepo .. "SaveManagerV3.lua"))()
+local function fetchDependency(name, urls)
+    local errors = {}
+
+    for _, url in ipairs(urls) do
+        for attempt = 1, 3 do
+            local ok, source = pcall(game.HttpGet, game, url)
+            if ok and typeof(source) == "string" and #source > 0 then
+                return source
+            end
+
+            errors[#errors + 1] = string.format("%s attempt %d: %s", url, attempt, tostring(source))
+            task.wait(0.35 * attempt)
+        end
+    end
+
+    error("Failed to download " .. name .. ":\n" .. table.concat(errors, "\n"))
+end
+
+local function loadDependency(name, urls)
+    local source = fetchDependency(name, urls)
+    local chunk, compileError = loadstring(source, "@" .. name)
+    if not chunk then
+        error("Failed to compile " .. name .. ": " .. tostring(compileError))
+    end
+    return chunk()
+end
+
+local function phosphyDependency(fileName)
+    return {
+        "https://raw.githubusercontent.com/Beonneon/Phosphy/refs/heads/main/" .. fileName,
+        "https://cdn.jsdelivr.net/gh/Beonneon/Phosphy@" .. DependencyCommit .. "/" .. fileName,
+        "https://raw.githubusercontent.com/Beonneon/Phosphy/" .. DependencyCommit .. "/" .. fileName,
+    }
+end
+
+local Library = loadDependency("LibraryV3.lua", phosphyDependency("LibraryV3.lua"))
+local ThemeManager = loadDependency("ThemeManager.lua", {
+    "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/addons/ThemeManager.lua",
+    "https://cdn.jsdelivr.net/gh/deividcomsono/Obsidian@main/addons/ThemeManager.lua",
+})
+local SaveManager = loadDependency("SaveManagerV3.lua", phosphyDependency("SaveManagerV3.lua"))
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
