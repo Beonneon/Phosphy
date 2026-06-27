@@ -55,6 +55,8 @@ local Session = "phosphy-slime-" .. tostring(os.clock())
 local Tasks = {}
 local Connections = {}
 local LastSentAt = {}
+local CorruptedSlimeIds = {}
+local FirstCorruptedSlimeId = nil
 local SpeedHumanoid = nil
 local OriginalWalkSpeed = nil
 
@@ -112,6 +114,46 @@ local function getCollectSlimesRemote()
         return nil
     end
     return remotes:FindFirstChild("CollectSlimes") or remotes:WaitForChild("CollectSlimes", 10)
+end
+
+local function getCollectSlimeRemote()
+    local remotes = getRemotes()
+    if not remotes then
+        return nil
+    end
+    return remotes:FindFirstChild("CollectSlime") or remotes:WaitForChild("CollectSlime", 10)
+end
+
+local function getSlimeSpawnedRemote()
+    local remotes = getRemotes()
+    if not remotes then
+        return nil
+    end
+    return remotes:FindFirstChild("SlimeSpawned") or remotes:WaitForChild("SlimeSpawned", 10)
+end
+
+local function getSlimeSpawnedBatchRemote()
+    local remotes = getRemotes()
+    if not remotes then
+        return nil
+    end
+    return remotes:FindFirstChild("SlimeSpawnedBatch") or remotes:WaitForChild("SlimeSpawnedBatch", 10)
+end
+
+local function getSlimeDespawnedRemote()
+    local remotes = getRemotes()
+    if not remotes then
+        return nil
+    end
+    return remotes:FindFirstChild("SlimeDespawned") or remotes:WaitForChild("SlimeDespawned", 10)
+end
+
+local function getSlimeDespawnedBatchRemote()
+    local remotes = getRemotes()
+    if not remotes then
+        return nil
+    end
+    return remotes:FindFirstChild("SlimeDespawnedBatch") or remotes:WaitForChild("SlimeDespawnedBatch", 10)
 end
 
 local function getActivateEmpoweredBoostRemote()
@@ -441,6 +483,180 @@ local function collectNearbyOnce()
     end
 
     return 0
+end
+
+local function setFirstCorruptedSlimeId()
+    FirstCorruptedSlimeId = nil
+    local count = 0
+
+    for id in pairs(CorruptedSlimeIds) do
+        count += 1
+        if not FirstCorruptedSlimeId then
+            FirstCorruptedSlimeId = id
+        end
+    end
+
+    Marker:SetAttribute("FirstCorruptedSlimeId", FirstCorruptedSlimeId or "")
+    Marker:SetAttribute("CorruptedSlimeIdCount", count)
+end
+
+local function addCorruptedSlimeId(id)
+    if typeof(id) ~= "string" and typeof(id) ~= "number" then
+        return false
+    end
+
+    id = tostring(id)
+    if id == "" then
+        return false
+    end
+
+    CorruptedSlimeIds[id] = true
+    if not FirstCorruptedSlimeId then
+        FirstCorruptedSlimeId = id
+    end
+
+    Marker:SetAttribute("FirstCorruptedSlimeId", FirstCorruptedSlimeId or "")
+    Marker:SetAttribute("CorruptedSlimeIdCount", 0)
+    local count = 0
+    for _ in pairs(CorruptedSlimeIds) do
+        count += 1
+    end
+    Marker:SetAttribute("CorruptedSlimeIdCount", count)
+    return true
+end
+
+local function removeCorruptedSlimeId(id)
+    if typeof(id) ~= "string" and typeof(id) ~= "number" then
+        return
+    end
+
+    id = tostring(id)
+    CorruptedSlimeIds[id] = nil
+    setFirstCorruptedSlimeId()
+end
+
+local function addCorruptedFromSpawn(...)
+    local args = { ... }
+
+    if args[3] == "Corrupted" then
+        return addCorruptedSlimeId(args[1])
+    end
+
+    for _, value in ipairs(args) do
+        if typeof(value) == "Instance" and value:GetAttribute("SlimeRarity") == "Corrupted" then
+            return addCorruptedSlimeId(getSlimeId(value))
+        elseif typeof(value) == "table" and value.rarity == "Corrupted" then
+            return addCorruptedSlimeId(value.id)
+        end
+    end
+
+    return false
+end
+
+local function addCorruptedFromBatch(payloads)
+    if typeof(payloads) ~= "table" then
+        return 0
+    end
+
+    local added = 0
+    for _, payload in pairs(payloads) do
+        if typeof(payload) == "table" and payload.rarity == "Corrupted" and addCorruptedSlimeId(payload.id) then
+            added += 1
+        end
+    end
+
+    return added
+end
+
+local function refreshCorruptedSlimeIdsFromWorkspace()
+    local slimes = getSlimesFolder()
+    if not slimes then
+        return 0
+    end
+
+    local added = 0
+    for _, slime in ipairs(slimes:GetChildren()) do
+        if slime:GetAttribute("SlimeRarity") == "Corrupted" and addCorruptedSlimeId(getSlimeId(slime)) then
+            added += 1
+        end
+    end
+
+    return added
+end
+
+local function startCorruptedSlimeTracker()
+    if Connections.CorruptedSlimeSpawned then
+        refreshCorruptedSlimeIdsFromWorkspace()
+        return
+    end
+
+    refreshCorruptedSlimeIdsFromWorkspace()
+
+    local spawned = getSlimeSpawnedRemote()
+    if spawned then
+        Connections.CorruptedSlimeSpawned = spawned.OnClientEvent:Connect(function(...)
+            addCorruptedFromSpawn(...)
+        end)
+    end
+
+    local spawnedBatch = getSlimeSpawnedBatchRemote()
+    if spawnedBatch then
+        Connections.CorruptedSlimeSpawnedBatch = spawnedBatch.OnClientEvent:Connect(addCorruptedFromBatch)
+    end
+
+    local despawned = getSlimeDespawnedRemote()
+    if despawned then
+        Connections.CorruptedSlimeDespawned = despawned.OnClientEvent:Connect(removeCorruptedSlimeId)
+    end
+
+    local despawnedBatch = getSlimeDespawnedBatchRemote()
+    if despawnedBatch then
+        Connections.CorruptedSlimeDespawnedBatch = despawnedBatch.OnClientEvent:Connect(function(ids)
+            if typeof(ids) ~= "table" then
+                return
+            end
+
+            for _, id in pairs(ids) do
+                removeCorruptedSlimeId(id)
+            end
+        end)
+    end
+end
+
+local function fireCorruptedSlimeCollect()
+    startCorruptedSlimeTracker()
+
+    if not FirstCorruptedSlimeId then
+        refreshCorruptedSlimeIdsFromWorkspace()
+    end
+
+    if not FirstCorruptedSlimeId then
+        notify("No corrupted slime ID yet. Needs area unlocked and one CS to spawn.")
+        return false
+    end
+
+    local remote = getCollectSlimeRemote()
+    if not remote then
+        notify("CollectSlime remote was not found.")
+        return false
+    end
+
+    remote:FireServer(FirstCorruptedSlimeId)
+    Marker:SetAttribute("CorruptedSlimeLastFireId", FirstCorruptedSlimeId)
+    Marker:SetAttribute("CorruptedSlimeLastFireAt", Workspace:GetServerTimeNow())
+    return true
+end
+
+local function startCorruptedSlimeLoop()
+    stopTask("CorruptedSlime")
+    startCorruptedSlimeTracker()
+
+    Tasks.CorruptedSlime = task.spawn(function()
+        while Toggles.ToggleAutoCorruptedSlime and Toggles.ToggleAutoCorruptedSlime.Value do
+            fireCorruptedSlimeCollect()
+            task.wait(math.max(1, getNumberOption("CorruptedSlimeIntervalSeconds", 10)))
+        end
+    end)
 end
 
 local function fireEmpoweredBoostStack(count, delaySeconds)
@@ -1234,6 +1450,46 @@ CollectorBox:AddButton({
     end,
 })
 
+local CorruptedSlimeBox = Tabs.Main:AddLeftGroupbox("Corrupted Slime", "skull")
+CorruptedSlimeBox:AddLabel({
+    Text = "Needs area unlocked and one corrupted slime spawned.",
+    DoesWrap = true,
+})
+CorruptedSlimeBox:AddSlider("CorruptedSlimeIntervalSeconds", {
+    Text = "CS Loop Interval",
+    Min = 1,
+    Max = 60,
+    Default = 10,
+    Rounding = 0,
+    Suffix = " s",
+})
+CorruptedSlimeBox:AddButton({
+    Text = "Refresh CS ID",
+    Func = function()
+        startCorruptedSlimeTracker()
+        local added = refreshCorruptedSlimeIdsFromWorkspace()
+        notify("CS id: " .. tostring(FirstCorruptedSlimeId or "none") .. " | refreshed: " .. tostring(added))
+    end,
+})
+CorruptedSlimeBox:AddButton({
+    Text = "Fire CS Once",
+    Func = function()
+        notify("CS collect fired: " .. tostring(fireCorruptedSlimeCollect()))
+    end,
+})
+CorruptedSlimeBox:AddButton({
+    Text = "Start CS Loop",
+    Func = function()
+        Toggles.ToggleAutoCorruptedSlime:SetValue(true)
+        startCorruptedSlimeLoop()
+        notify("CS loop started.")
+    end,
+})
+CorruptedSlimeBox:AddCheckbox("ToggleAutoCorruptedSlime", {
+    Text = "Auto CS Loop",
+    Default = false,
+})
+
 local BeamBoostBox = Tabs.Main:AddRightGroupbox("Beam Boost", "zap")
 BeamBoostBox:AddSlider("BeamBoostCount", {
     Text = "Max Fire Count",
@@ -1546,6 +1802,13 @@ Toggles.ToggleActualRing:OnChanged(function()
 end)
 
 Toggles.ToggleCollectAll:OnChanged(updateMarker)
+Toggles.ToggleAutoCorruptedSlime:OnChanged(function(state)
+    if state then
+        startCorruptedSlimeLoop()
+    else
+        stopTask("CorruptedSlime")
+    end
+end)
 Toggles.ToggleAutoBeamBoost:OnChanged(function(state)
     if state then
         startBeamBoostLoop()
@@ -1686,6 +1949,10 @@ end
 startRingVisual()
 if Toggles.ToggleHugeCollector.Value then
     startCollector()
+end
+startCorruptedSlimeTracker()
+if Toggles.ToggleAutoCorruptedSlime.Value then
+    startCorruptedSlimeLoop()
 end
 if Toggles.ToggleAutoGodlyOrb.Value then
     startGodlyOrbLoop()
