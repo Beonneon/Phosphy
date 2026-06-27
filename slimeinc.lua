@@ -735,22 +735,8 @@ local function getPlinkoMachine()
     return machine or Workspace:FindFirstChild("PlinkoBallMachine", true)
 end
 
-local function getPlinkoCooldownLabel()
-    local zones = Workspace:FindFirstChild("Zones", true)
-    local lvl10 = zones and zones:FindFirstChild("Lvl10")
-    local field = lvl10 and lvl10:FindFirstChild("PlinkoBallField")
-    local mainPart = field and field:FindFirstChild("mainpart")
-    local cooldownGui = mainPart and mainPart:FindFirstChild("CooldownGui")
-    local cooldown = cooldownGui and cooldownGui:FindFirstChild("Cooldown")
-    return cooldown and cooldown:IsA("TextLabel") and cooldown or nil
-end
-
 local function isReadyLabel(label)
     return label ~= nil and tostring(label.Text):upper():match("^%s*READY%s*$") ~= nil
-end
-
-local function isPlinkoReady()
-    return isReadyLabel(getPlinkoCooldownLabel())
 end
 
 local function findPlinko4xEndParts()
@@ -805,10 +791,6 @@ local function findPlinko4xEndParts()
 end
 
 local function firePlinko4x()
-    if not isPlinkoReady() or not canFireReadyAction("Plinko", 2) then
-        return 0
-    end
-
     local remote = getActivatePlinkoBallRemote()
     if not remote then
         notify("ActivatePlinkoBall remote was not found.")
@@ -821,6 +803,8 @@ local function firePlinko4x()
         return 0
     end
 
+    remote:FireServer()
+    task.wait(0.1)
     remote:FireServer(parts[1])
     Marker:SetAttribute("PlinkoLastUsedAt", Workspace:GetServerTimeNow())
     return 1
@@ -1993,7 +1977,7 @@ local function startAutoPlinkoLoop()
     Tasks.AutoPlinko = task.spawn(function()
         while Toggles.ToggleAutoPlinko and Toggles.ToggleAutoPlinko.Value do
             firePlinko4x()
-            task.wait(0.5)
+            task.wait(30)
         end
     end)
 end
@@ -2314,7 +2298,7 @@ DropBoostBox:AddButton({
     Func = function()
         task.spawn(function()
             local fired = firePlinko4x()
-            notify(fired > 0 and "Plinko 4x fired." or "Plinko is not ready yet.")
+            notify(fired > 0 and "Plinko 4x fired." or "Plinko 4x could not fire.")
         end)
     end,
 })
