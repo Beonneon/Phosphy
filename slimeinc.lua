@@ -18,6 +18,8 @@ local Session = "phosphy-slime-" .. tostring(os.clock())
 local Tasks = {}
 local Connections = {}
 local LastSentAt = {}
+local CleanbotRollPending = false
+local CleanbotRollStartedAt = 0
 
 local Marker = Workspace:FindFirstChild("PhosphySlimeCollector")
 if not Marker then
@@ -129,6 +131,22 @@ local function getCollectGemBobGemsRemote()
         return nil
     end
     return remotes:FindFirstChild("CollectGemBobGems") or remotes:WaitForChild("CollectGemBobGems", 10)
+end
+
+local function getRollRoombaRemote()
+    local remotes = getRemotes()
+    if not remotes then
+        return nil
+    end
+    return remotes:FindFirstChild("RollRoomba") or remotes:WaitForChild("RollRoomba", 10)
+end
+
+local function getRoombaRollResultRemote()
+    local remotes = getRemotes()
+    if not remotes then
+        return nil
+    end
+    return remotes:FindFirstChild("RoombaRollResult") or remotes:WaitForChild("RoombaRollResult", 10)
 end
 
 local function getSlimesFolder()
@@ -535,6 +553,82 @@ local function scheduleGemBatchClaims(gems)
     end)
 end
 
+local AbilityRemotes = {
+    { name = "ActivateHolyBeam", toggle = "ToggleAbilityHolyBeam" },
+    { name = "ActivateVoid", toggle = "ToggleAbilityVoid" },
+    { name = "ActivateLuckyRush", toggle = "ToggleAbilityLuckyRush" },
+}
+
+local function fireAbilitiesOnce()
+    local remotes = getRemotes()
+    if not remotes then
+        notify("Abilities remotes folder was not found.")
+        return 0
+    end
+
+    local fired = 0
+    for _, ability in ipairs(AbilityRemotes) do
+        local toggle = Toggles[ability.toggle]
+        if not toggle or toggle.Value then
+            local remote = remotes:FindFirstChild(ability.name)
+            if remote then
+                remote:FireServer()
+                fired += 1
+                task.wait(0.05)
+            end
+        end
+    end
+
+    Marker:SetAttribute("AbilitiesLastFired", fired)
+    Marker:SetAttribute("AbilitiesLastFireTime", Workspace:GetServerTimeNow())
+    return fired
+end
+
+local function startCleanbotResultListener()
+    if Connections.CleanbotResult then
+        return true
+    end
+
+    local remote = getRoombaRollResultRemote()
+    if not remote then
+        notify("RoombaRollResult remote was not found.")
+        return false
+    end
+
+    Connections.CleanbotResult = remote.OnClientEvent:Connect(function(cleanbot, isNew)
+        CleanbotRollPending = false
+        Marker:SetAttribute("CleanbotLastResult", tostring(cleanbot))
+        Marker:SetAttribute("CleanbotLastWasNew", isNew == true)
+        Marker:SetAttribute("CleanbotLastResultTime", Workspace:GetServerTimeNow())
+    end)
+    return true
+end
+
+local function fireCleanbotRoll()
+    local timeout = 5
+    if CleanbotRollPending and os.clock() - CleanbotRollStartedAt < timeout then
+        return false
+    end
+
+    local remote = getRollRoombaRemote()
+    if not remote or not startCleanbotResultListener() then
+        notify("RollRoomba remote was not found.")
+        return false
+    end
+
+    CleanbotRollPending = true
+    CleanbotRollStartedAt = os.clock()
+    remote:FireServer()
+    Marker:SetAttribute("CleanbotRollLastFire", Workspace:GetServerTimeNow())
+
+    task.delay(timeout, function()
+        if CleanbotRollPending and os.clock() - CleanbotRollStartedAt >= timeout then
+            CleanbotRollPending = false
+        end
+    end)
+    return true
+end
+
 local function startBeamBoostLoop()
     stopTask("BeamBoost")
 
@@ -597,6 +691,29 @@ local function startGemStormLoop()
         while Toggles.ToggleAutoGemStorm and Toggles.ToggleAutoGemStorm.Value do
             fireGemStorm()
             task.wait(math.max(1, getNumberOption("GemStormRetrySeconds", 5)))
+        end
+    end)
+end
+
+local function startAutoAbilitiesLoop()
+    stopTask("AutoAbilities")
+
+    Tasks.AutoAbilities = task.spawn(function()
+        while Toggles.ToggleAutoAbilities and Toggles.ToggleAutoAbilities.Value do
+            fireAbilitiesOnce()
+            task.wait(math.max(0.25, getNumberOption("AutoAbilitiesIntervalMs", 1000) / 1000))
+        end
+    end)
+end
+
+local function startAutoCleanbotLoop()
+    stopTask("AutoCleanbot")
+    startCleanbotResultListener()
+
+    Tasks.AutoCleanbot = task.spawn(function()
+        while Toggles.ToggleAutoCleanbotRoll and Toggles.ToggleAutoCleanbotRoll.Value do
+            fireCleanbotRoll()
+            task.wait(math.max(0.25, getNumberOption("CleanbotRollIntervalMs", 1000) / 1000))
         end
     end)
 end
@@ -785,6 +902,40 @@ BeamBoostBox:AddCheckbox("ToggleAutoBeamBoost", {
     Default = false,
 })
 
+local AbilityBox = Tabs.Main:AddRightGroupbox("Abilities", "wand-sparkles")
+AbilityBox:AddSlider("AutoAbilitiesIntervalMs", {
+    Text = "Ability Interval",
+    Min = 250,
+    Max = 10000,
+    Default = 1000,
+    Rounding = 0,
+    Suffix = " ms",
+})
+AbilityBox:AddButton({
+    Text = "Use Abilities Once",
+    Func = function()
+        task.spawn(function()
+            notify("Abilities fired: " .. tostring(fireAbilitiesOnce()))
+        end)
+    end,
+})
+AbilityBox:AddCheckbox("ToggleAutoAbilities", {
+    Text = "Auto Abilities",
+    Default = false,
+})
+AbilityBox:AddCheckbox("ToggleAbilityHolyBeam", {
+    Text = "Use Holy Beam",
+    Default = true,
+})
+AbilityBox:AddCheckbox("ToggleAbilityVoid", {
+    Text = "Use Void",
+    Default = true,
+})
+AbilityBox:AddCheckbox("ToggleAbilityLuckyRush", {
+    Text = "Use Lucky Rush",
+    Default = true,
+})
+
 local DropBoostBox = Tabs.Main:AddRightGroupbox("Plinko / Crates", "gift")
 DropBoostBox:AddSlider("Plinko4xFireCount", {
     Text = "Plinko 4x Fires",
@@ -886,6 +1037,26 @@ GemStormBox:AddCheckbox("ToggleAutoCollectGemStorm", {
     Default = true,
 })
 
+local CleanbotBox = Tabs.Main:AddLeftGroupbox("Cleanbot", "bot")
+CleanbotBox:AddSlider("CleanbotRollIntervalMs", {
+    Text = "Roll Interval",
+    Min = 250,
+    Max = 10000,
+    Default = 1000,
+    Rounding = 0,
+    Suffix = " ms",
+})
+CleanbotBox:AddButton({
+    Text = "Roll Cleanbot Once",
+    Func = function()
+        notify("Cleanbot roll fired: " .. tostring(fireCleanbotRoll()))
+    end,
+})
+CleanbotBox:AddCheckbox("ToggleAutoCleanbotRoll", {
+    Text = "Auto Roll Cleanbot",
+    Default = false,
+})
+
 local InfoBox = Tabs.Main:AddRightGroupbox("Live Tuning", "sliders-horizontal")
 InfoBox:AddLabel({
     Text = "Workspace marker: PhosphySlimeCollector",
@@ -929,6 +1100,13 @@ Toggles.ToggleAutoBeamBoost:OnChanged(function(state)
         stopTask("BeamBoost")
     end
 end)
+Toggles.ToggleAutoAbilities:OnChanged(function(state)
+    if state then
+        startAutoAbilitiesLoop()
+    else
+        stopTask("AutoAbilities")
+    end
+end)
 Toggles.ToggleAutoGodlyOrb:OnChanged(function(state)
     if state then
         startGodlyOrbLoop()
@@ -962,6 +1140,13 @@ Toggles.ToggleAutoCollectGemStorm:OnChanged(function(state)
         startGemAutoCollect()
     else
         disconnect("GemBatch")
+    end
+end)
+Toggles.ToggleAutoCleanbotRoll:OnChanged(function(state)
+    if state then
+        startAutoCleanbotLoop()
+    else
+        stopTask("AutoCleanbot")
     end
 end)
 Options.CollectorRadius:OnChanged(function()
@@ -1033,6 +1218,9 @@ end
 if Toggles.ToggleAutoGodlyOrb.Value then
     startGodlyOrbLoop()
 end
+if Toggles.ToggleAutoAbilities.Value then
+    startAutoAbilitiesLoop()
+end
 if Toggles.ToggleAutoPlinko.Value then
     startAutoPlinkoLoop()
 end
@@ -1044,6 +1232,9 @@ if Toggles.ToggleAutoGemStorm.Value then
 end
 if Toggles.ToggleAutoCollectGemStorm.Value then
     startGemAutoCollect()
+end
+if Toggles.ToggleAutoCleanbotRoll.Value then
+    startAutoCleanbotLoop()
 end
 
 notify("slimeinc loaded.")
