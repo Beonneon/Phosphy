@@ -18,8 +18,6 @@ local Session = "phosphy-slime-" .. tostring(os.clock())
 local Tasks = {}
 local Connections = {}
 local LastSentAt = {}
-local CleanbotRollPending = false
-local CleanbotRollStartedAt = 0
 
 local Marker = Workspace:FindFirstChild("PhosphySlimeCollector")
 if not Marker then
@@ -596,7 +594,6 @@ local function startCleanbotResultListener()
     end
 
     Connections.CleanbotResult = remote.OnClientEvent:Connect(function(cleanbot, isNew)
-        CleanbotRollPending = false
         Marker:SetAttribute("CleanbotLastResult", tostring(cleanbot))
         Marker:SetAttribute("CleanbotLastWasNew", isNew == true)
         Marker:SetAttribute("CleanbotLastResultTime", Workspace:GetServerTimeNow())
@@ -605,27 +602,14 @@ local function startCleanbotResultListener()
 end
 
 local function fireCleanbotRoll()
-    local timeout = 5
-    if CleanbotRollPending and os.clock() - CleanbotRollStartedAt < timeout then
-        return false
-    end
-
     local remote = getRollRoombaRemote()
     if not remote or not startCleanbotResultListener() then
         notify("RollRoomba remote was not found.")
         return false
     end
 
-    CleanbotRollPending = true
-    CleanbotRollStartedAt = os.clock()
     remote:FireServer()
     Marker:SetAttribute("CleanbotRollLastFire", Workspace:GetServerTimeNow())
-
-    task.delay(timeout, function()
-        if CleanbotRollPending and os.clock() - CleanbotRollStartedAt >= timeout then
-            CleanbotRollPending = false
-        end
-    end)
     return true
 end
 
@@ -1054,7 +1038,7 @@ CleanbotBox:AddButton({
 })
 CleanbotBox:AddCheckbox("ToggleAutoCleanbotRoll", {
     Text = "Auto Roll Cleanbot",
-    Default = false,
+    Default = true,
 })
 
 local InfoBox = Tabs.Main:AddRightGroupbox("Live Tuning", "sliders-horizontal")
