@@ -57,6 +57,7 @@ local Connections = {}
 local LastSentAt = {}
 local CorruptedSlimeIds = {}
 local FirstCorruptedSlimeId = nil
+local LegacyCorruptedSlimeId = nil
 local SpeedHumanoid = nil
 local OriginalWalkSpeed = nil
 
@@ -154,6 +155,18 @@ local function getSlimeDespawnedBatchRemote()
         return nil
     end
     return remotes:FindFirstChild("SlimeDespawnedBatch") or remotes:WaitForChild("SlimeDespawnedBatch", 10)
+end
+
+local function getLegacyCSlimeEvents()
+    return ReplicatedStorage:FindFirstChild("CSlimeSpawnEvents")
+end
+
+local function getLegacyCSlimeCollectedRemote()
+    local folder = getLegacyCSlimeEvents()
+    if not folder then
+        return nil
+    end
+    return folder:FindFirstChild("SlimeCollected") or folder:WaitForChild("SlimeCollected", 5)
 end
 
 local function getActivateEmpoweredBoostRemote()
@@ -525,6 +538,17 @@ local function addCorruptedSlimeId(id)
     return true
 end
 
+local function setLegacyCorruptedSlimeId(id)
+    if LegacyCorruptedSlimeId or (typeof(id) ~= "string" and typeof(id) ~= "number") then
+        return false
+    end
+
+    LegacyCorruptedSlimeId = tostring(id)
+    Marker:SetAttribute("LegacyCorruptedSlimeId", LegacyCorruptedSlimeId)
+    addCorruptedSlimeId(LegacyCorruptedSlimeId)
+    return true
+end
+
 local function removeCorruptedSlimeId(id)
     if typeof(id) ~= "string" and typeof(id) ~= "number" then
         return
@@ -568,6 +592,48 @@ local function addCorruptedFromBatch(payloads)
     return added
 end
 
+local function connectLegacyCorruptedSlimeEvents()
+    if Connections.LegacyCSlimeSpawned then
+        return true
+    end
+
+    local folder = getLegacyCSlimeEvents()
+    local spawnSlime = folder and folder:FindFirstChild("SpawnSlime")
+    if not spawnSlime then
+        Marker:SetAttribute("LegacyCSlimeEventsReady", false)
+        return false
+    end
+
+    Connections.LegacyCSlimeSpawned = spawnSlime.OnClientEvent:Connect(function(_, slimeID)
+        setLegacyCorruptedSlimeId(slimeID)
+    end)
+    Marker:SetAttribute("LegacyCSlimeEventsReady", true)
+    return true
+end
+
+local function startLegacyCorruptedSlimeWatcher()
+    if Connections.LegacyCSlimeSpawned or Tasks.LegacyCSlimeWatcher then
+        return
+    end
+
+    Tasks.LegacyCSlimeWatcher = task.spawn(function()
+        while not Connections.LegacyCSlimeSpawned do
+            if connectLegacyCorruptedSlimeEvents() then
+                break
+            end
+
+            local folder = ReplicatedStorage:WaitForChild("CSlimeSpawnEvents", 5)
+            if folder then
+                connectLegacyCorruptedSlimeEvents()
+            end
+
+            task.wait(2)
+        end
+
+        Tasks.LegacyCSlimeWatcher = nil
+    end)
+end
+
 local function refreshCorruptedSlimeIdsFromWorkspace()
     local slimes = getSlimesFolder()
     if not slimes then
@@ -585,6 +651,10 @@ local function refreshCorruptedSlimeIdsFromWorkspace()
 end
 
 local function startCorruptedSlimeTracker()
+    if not connectLegacyCorruptedSlimeEvents() then
+        startLegacyCorruptedSlimeWatcher()
+    end
+
     if Connections.CorruptedSlimeSpawned then
         refreshCorruptedSlimeIdsFromWorkspace()
         return
@@ -626,23 +696,58 @@ end
 local function fireCorruptedSlimeCollect()
     startCorruptedSlimeTracker()
 
-    if not FirstCorruptedSlimeId then
-        refreshCorruptedSlimeIdsFromWorkspace()
+    if not LegacyCorruptedSlimeId then
+        connectLegacyCorruptedSlimeEvents()
     end
 
-    if not FirstCorruptedSlimeId then
-        notify("No corrupted slime ID yet. Needs area unlocked and one CS to spawn.")
+    local legacyRemote = getLegacyCSlimeCollectedRemote()
+    if legacyRemote and LegacyCorruptedSlimeId then
+        legacyRemote:FireServer(LegacyCorruptedSlimeId)
+        Marker:SetAttribute("CorruptedSlimeLastFireId", LegacyCorruptedSlimeId)
+        Marker:SetAttribute("CorruptedSlimeLastFireCount", 1)
+        Marker:SetAttribute("CorruptedSlimeLastFireRemote", "CSlimeSpawnEvents.SlimeCollected")
+        Marker:SetAttribute("CorruptedSlimeLastFireAt", Workspace:GetServerTimeNow())
+        return true
+    end
+
+    refreshCorruptedSlimeIdsFromWorkspace()
+
+    local ids = {}
+    for id in pairs(CorruptedSlimeIds) do
+        ids[#ids + 1] = id
+        if #ids >= 80 then
+            break
+        end
+    end
+
+    if #ids == 0 then
+        notify("No CS ID yet. Needs area unlocked and one corrupted slime spawned.")
         return false
     end
 
-    local remote = getCollectSlimeRemote()
+    local remoteName = "CollectSlimes"
+    local remote
+    if #ids == 1 then
+        remoteName = "CollectSlime"
+        remote = getCollectSlimeRemote()
+    else
+        remote = getCollectSlimesRemote()
+    end
+
     if not remote then
-        notify("CollectSlime remote was not found.")
+        notify(remoteName .. " remote was not found.")
         return false
     end
 
-    remote:FireServer(FirstCorruptedSlimeId)
-    Marker:SetAttribute("CorruptedSlimeLastFireId", FirstCorruptedSlimeId)
+    if #ids == 1 then
+        remote:FireServer(ids[1])
+    else
+        remote:FireServer(ids)
+    end
+
+    Marker:SetAttribute("CorruptedSlimeLastFireId", ids[1])
+    Marker:SetAttribute("CorruptedSlimeLastFireCount", #ids)
+    Marker:SetAttribute("CorruptedSlimeLastFireRemote", "Remotes." .. remoteName)
     Marker:SetAttribute("CorruptedSlimeLastFireAt", Workspace:GetServerTimeNow())
     return true
 end
