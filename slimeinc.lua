@@ -74,6 +74,23 @@ local PotionRequestedUntil = {}
 local ActiveBoosts = {}
 local BoostStateReady = false
 local BoostStateLastRequestedAt = 0
+local FallingStarMovePosition = nil
+local FallingStarMoveUntil = 0
+local MidasLastCollectAt = {}
+local AutofarmCFrame = CFrame.new(
+    -5.32521152,
+    4.3090837,
+    -6.48988485,
+    0.99855119,
+    0.014181748,
+    0.05190669,
+    -0.0107820705,
+    0.997814,
+    -0.0651995018,
+    -0.0527178794,
+    0.064545393,
+    0.996521235
+)
 
 local Marker = Workspace:FindFirstChild("PhosphySlimeCollector")
 if not Marker then
@@ -391,6 +408,83 @@ local function getHumanoid()
     end
 
     return character:FindFirstChildOfClass("Humanoid")
+end
+
+local function setFallingStarMovementTarget(position, holdSeconds)
+    if typeof(position) ~= "Vector3" then
+        return
+    end
+
+    FallingStarMovePosition = position
+    FallingStarMoveUntil = os.clock() + math.max(0.35, tonumber(holdSeconds) or 0.35)
+end
+
+local function getTotemAreaCFrame()
+    local totem = Workspace:FindFirstChild("Totem")
+    local area = totem and totem:FindFirstChild("TotemArea")
+    if not area then
+        return nil
+    end
+
+    if area:IsA("BasePart") then
+        local yOffset = math.max(2, area.Size.Y * 0.5 + 1)
+        return area.CFrame + Vector3.new(0, yOffset, 0)
+    end
+
+    if area:IsA("Model") then
+        return area:GetPivot() + Vector3.new(0, 2, 0)
+    end
+
+    return nil
+end
+
+local function getPriorityMovementTarget()
+    if FallingStarMovePosition and os.clock() <= FallingStarMoveUntil then
+        return CFrame.new(FallingStarMovePosition + Vector3.new(0, 3, 0)), "Falling Star"
+    end
+
+    FallingStarMovePosition = nil
+    FallingStarMoveUntil = 0
+
+    local autoFarm = Toggles.ToggleAutoFarm and Toggles.ToggleAutoFarm.Value
+    local autoTotem = Toggles.ToggleAutoTotemContact and Toggles.ToggleAutoTotemContact.Value
+    if autoFarm or autoTotem then
+        local totemCFrame = getTotemAreaCFrame()
+        if totemCFrame then
+            return totemCFrame, "Totem"
+        end
+    end
+
+    if autoFarm then
+        return AutofarmCFrame, "Autofarm"
+    end
+
+    return nil, "None"
+end
+
+local function startMovementCoordinator()
+    disconnect("MovementCoordinator")
+    local lastMode = "None"
+
+    Connections.MovementCoordinator = RunService.Heartbeat:Connect(function()
+        if Marker:GetAttribute("Session") ~= Session then
+            disconnect("MovementCoordinator")
+            return
+        end
+
+        local target, mode = getPriorityMovementTarget()
+        local root = getRoot()
+        if target and root then
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            root.CFrame = target
+        end
+
+        if mode ~= lastMode then
+            lastMode = mode
+            Marker:SetAttribute("MovementPriority", mode)
+        end
+    end)
 end
 
 local function applyPlayerSpeed()
@@ -866,8 +960,8 @@ local function collectFallingStarPart(part)
         return false
     end
 
-    local originalCFrame = root.CFrame
     local holdSeconds = 0.25
+    setFallingStarMovementTarget(part.Position, holdSeconds + 0.15)
     root.CFrame = CFrame.new(part.Position + Vector3.new(0, 3, 0))
     task.wait(holdSeconds)
 
@@ -875,11 +969,6 @@ local function collectFallingStarPart(part)
         pcall(firetouchinterest, root, part, 0)
         task.wait(0.05)
         pcall(firetouchinterest, root, part, 1)
-    end
-
-    if Toggles.ToggleFallingStarReturn and Toggles.ToggleFallingStarReturn.Value then
-        task.wait(0.05)
-        root.CFrame = originalCFrame
     end
 
     return true
@@ -891,15 +980,10 @@ local function collectFallingStarPosition(position)
         return false
     end
 
-    local originalCFrame = root.CFrame
     local holdSeconds = 0.25
+    setFallingStarMovementTarget(position, holdSeconds + 0.15)
     root.CFrame = CFrame.new(position + Vector3.new(0, 3, 0))
     task.wait(holdSeconds)
-
-    if Toggles.ToggleFallingStarReturn and Toggles.ToggleFallingStarReturn.Value then
-        task.wait(0.05)
-        root.CFrame = originalCFrame
-    end
 
     return true
 end
@@ -1051,6 +1135,51 @@ local function fireGodlyOrbClaim(count, delaySeconds)
     end
 
     return count
+end
+
+local function collectMidasGoldBar(id)
+    if typeof(id) ~= "string" and typeof(id) ~= "number" then
+        return false
+    end
+
+    local key = tostring(id)
+    local now = os.clock()
+    if now - (MidasLastCollectAt[key] or 0) < 1 then
+        return false
+    end
+
+    local remote = getRemote("CollectGoldBar", 10)
+    if not remote then
+        notify("CollectGoldBar remote was not found.")
+        return false
+    end
+
+    MidasLastCollectAt[key] = now
+    remote:FireServer(id)
+    Marker:SetAttribute("MidasLastGoldBarId", key)
+    Marker:SetAttribute("MidasLastGoldBarCollectAt", Workspace:GetServerTimeNow())
+    return true
+end
+
+local function connectMidasGoldEvents()
+    local spawned = getRemote("GoldBarSpawned", 10)
+    if spawned and not Connections.MidasGoldBarSpawned then
+        Connections.MidasGoldBarSpawned = spawned.OnClientEvent:Connect(function(id)
+            Marker:SetAttribute("MidasLastGoldBarSpawnedAt", Workspace:GetServerTimeNow())
+            if Toggles.ToggleAutoMidasGold and Toggles.ToggleAutoMidasGold.Value then
+                task.defer(collectMidasGoldBar, id)
+            end
+        end)
+    end
+
+    local cleared = getRemote("GoldBarCleared", 10)
+    if cleared and not Connections.MidasGoldBarCleared then
+        Connections.MidasGoldBarCleared = cleared.OnClientEvent:Connect(function(id)
+            if typeof(id) == "string" or typeof(id) == "number" then
+                MidasLastCollectAt[tostring(id)] = nil
+            end
+        end)
+    end
 end
 
 local function getGemBobActionButton()
@@ -2227,10 +2356,6 @@ FallingStarBox:AddCheckbox("ToggleAutoCollectFallingStars", {
     Text = "Auto Collect Stars",
     Default = true,
 })
-FallingStarBox:AddCheckbox("ToggleFallingStarReturn", {
-    Text = "Return After Touch",
-    Default = true,
-})
 
 local OrbBox = Tabs.Automation:AddRightGroupbox("Godly Orb", "sparkles")
 OrbBox:AddSlider("GodlyOrbClaimDelayMs", {
@@ -2251,6 +2376,12 @@ OrbBox:AddButton({
 })
 OrbBox:AddCheckbox("ToggleAutoGodlyOrb", {
     Text = "Auto Claim Godly Orb",
+    Default = true,
+})
+
+local MidasBox = Tabs.Automation:AddRightGroupbox("Midas Bob", "coins")
+MidasBox:AddCheckbox("ToggleAutoMidasGold", {
+    Text = "Auto Golden Ingot",
     Default = true,
 })
 
@@ -2277,6 +2408,10 @@ CleanbotBox:AddCheckbox("ToggleAutoCleanbotRoll", {
 })
 
 local PlayerBox = Tabs.Main:AddLeftGroupbox("Player", "person-standing")
+PlayerBox:AddCheckbox("ToggleAutoFarm", {
+    Text = "Auto Farm",
+    Default = false,
+})
 PlayerBox:AddSlider("PlayerSpeed", {
     Text = "Walk Speed",
     Min = 16,
@@ -2409,6 +2544,14 @@ Toggles.ToggleAutoCleanbotRoll:OnChanged(function(state)
         stopTask("AutoCleanbot")
     end
 end)
+Toggles.ToggleAutoMidasGold:OnChanged(function(state)
+    if state then
+        connectMidasGoldEvents()
+    end
+end)
+Toggles.ToggleAutoFarm:OnChanged(function(state)
+    Marker:SetAttribute("AutoFarmEnabled", state == true)
+end)
 Toggles.TogglePlayerSpeed:OnChanged(function(state)
     if state then
         startPlayerSpeed()
@@ -2483,6 +2626,8 @@ if Options.CollectorRadius.Value < 5000 then
 end
 
 startRingVisual()
+startMovementCoordinator()
+connectMidasGoldEvents()
 if Toggles.ToggleHugeCollector.Value then
     startCollector()
 end
