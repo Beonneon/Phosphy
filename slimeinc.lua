@@ -47,7 +47,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local VirtualUser = game:GetService("VirtualUser")
 local Workspace = game:GetService("Workspace")
-
 local LocalPlayer = Players.LocalPlayer
 local Options = Library.Options
 local Toggles = Library.Toggles
@@ -69,7 +68,8 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.1.0",
+    Version = "1.2.0",
+    PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
     CleanbotRollPending = false,
@@ -3168,6 +3168,396 @@ local function stopCollector()
     Extra.stopInstantSpawnCollector()
 end
 
+Extra.PerfVfx = {
+    ParticleEmitter = true,
+    Trail = true,
+    Beam = true,
+    Fire = true,
+    Smoke = true,
+    Sparkles = true,
+    PointLight = true,
+    SpotLight = true,
+    SurfaceLight = true,
+    Highlight = true,
+    BloomEffect = true,
+    BlurEffect = true,
+    DepthOfFieldEffect = true,
+    SunRaysEffect = true,
+    ColorCorrectionEffect = true,
+}
+
+function Extra.perfToggle(id, fallback)
+    local toggle = Toggles[id]
+    if not toggle then
+        return fallback == true
+    end
+    return toggle.Value == true
+end
+
+function Extra.perfOption(id, fallback)
+    local option = Options[id]
+    local value = option and tonumber(option.Value)
+    return value or fallback
+end
+
+function Extra.safeSet(instance, property, value)
+    if not instance then
+        return false
+    end
+    return pcall(function()
+        instance[property] = value
+    end)
+end
+
+function Extra.findPath(root, path)
+    local current = root
+    for _, name in ipairs(path) do
+        current = current and current:FindFirstChild(name)
+        if not current then
+            return nil
+        end
+    end
+    return current
+end
+
+function Extra.perfPlayerGui()
+    return LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui") or nil
+end
+
+function Extra.perfMainGui()
+    local gui = Extra.perfPlayerGui()
+    return gui and gui:FindFirstChild("MainGui") or nil
+end
+
+function Extra.setPerfStatus(text)
+    text = tostring(text)
+    Marker:SetAttribute("PerformanceStatus", text)
+    if Extra.PerformanceStatusLabel then
+        pcall(function()
+            Extra.PerformanceStatusLabel:SetText(text)
+        end)
+    end
+end
+
+function Extra.disablePerfVfx(instance)
+    if not instance then
+        return 0
+    end
+
+    local className = instance.ClassName
+    if className == "ParticleEmitter" then
+        Extra.safeSet(instance, "Enabled", false)
+        Extra.safeSet(instance, "Rate", 0)
+        pcall(function()
+            instance:Clear()
+        end)
+        return 1
+    end
+
+    if Extra.PerfVfx[className] then
+        Extra.safeSet(instance, "Enabled", false)
+        return 1
+    end
+
+    if className == "Explosion" then
+        Extra.safeSet(instance, "Visible", false)
+        Extra.safeSet(instance, "BlastPressure", 0)
+        Extra.safeSet(instance, "BlastRadius", 0)
+        return 1
+    end
+
+    return 0
+end
+
+function Extra.hidePerfWorldObject(instance)
+    if not instance then
+        return 0
+    end
+
+    if instance:IsA("BasePart") then
+        Extra.safeSet(instance, "Transparency", 1)
+        Extra.safeSet(instance, "LocalTransparencyModifier", 1)
+        Extra.safeSet(instance, "CastShadow", false)
+        return 1
+    end
+
+    if instance:IsA("Decal") or instance:IsA("Texture") then
+        Extra.safeSet(instance, "Transparency", 1)
+        return 1
+    end
+
+    if instance:IsA("SurfaceGui") or instance:IsA("BillboardGui") then
+        Extra.safeSet(instance, "Enabled", false)
+        return 1
+    end
+
+    return Extra.disablePerfVfx(instance)
+end
+
+function Extra.hidePerfTree(root)
+    if not root then
+        return 0
+    end
+
+    local count = Extra.hidePerfWorldObject(root)
+    for _, descendant in ipairs(root:GetDescendants()) do
+        count += Extra.hidePerfWorldObject(descendant)
+    end
+    return count
+end
+
+function Extra.setPerfGuiRoot(root, hidden)
+    if not root then
+        return 0
+    end
+
+    if root:IsA("ScreenGui") or root:IsA("BillboardGui") or root:IsA("SurfaceGui") then
+        Extra.safeSet(root, "Enabled", not hidden)
+        return 1
+    end
+
+    if root:IsA("GuiObject") then
+        Extra.safeSet(root, "Visible", not hidden)
+        return 1
+    end
+
+    return 0
+end
+
+function Extra.sweepPerfVfx()
+    local count = 0
+    local roots = { Workspace, ReplicatedStorage, Extra.PerfLighting }
+    local gui = Extra.perfPlayerGui()
+    if gui then
+        roots[#roots + 1] = gui
+    end
+
+    for _, root in ipairs(roots) do
+        count += Extra.disablePerfVfx(root)
+        for _, descendant in ipairs(root:GetDescendants()) do
+            count += Extra.disablePerfVfx(descendant)
+        end
+    end
+
+    if Extra.perfToggle("TogglePerfNoShadows", true) then
+        Extra.safeSet(Extra.PerfLighting, "GlobalShadows", false)
+    end
+    if Extra.perfToggle("TogglePerfLowQuality", true) then
+        pcall(function()
+            settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+        end)
+    end
+
+    return count
+end
+
+function Extra.sweepPerfSlimes()
+    return Extra.hidePerfTree(Extra.findPath(Workspace, { "Runtime", "Slimes" }))
+end
+
+function Extra.sweepPerfCleanbots()
+    local count = Extra.hidePerfTree(Extra.findPath(Workspace, { "Runtime", "Roombas" }))
+    local zones = Extra.findPath(Workspace, { "World", "Zones" })
+    if zones then
+        for _, item in ipairs(zones:GetDescendants()) do
+            local name = tostring(item.Name):lower()
+            if name:find("roomba", 1, true) and not name:find("upgrade", 1, true) then
+                count += Extra.hidePerfTree(item)
+            end
+        end
+    end
+    return count
+end
+
+function Extra.sweepPerfBobs()
+    local count = 0
+    local followers = Extra.findPath(Workspace, { "Runtime", "Followers" })
+    if followers then
+        for _, follower in ipairs(followers:GetChildren()) do
+            if tostring(follower.Name):lower():find("bob", 1, true) then
+                count += Extra.hidePerfTree(follower)
+            end
+        end
+    end
+
+    local interactables = Workspace:FindFirstChild("Interactables")
+    if interactables then
+        count += Extra.hidePerfTree(interactables:FindFirstChild("GiftBobSpawnPos"))
+        count += Extra.hidePerfTree(interactables:FindFirstChild("GiftBobSpawnOrb"))
+        count += Extra.hidePerfTree(interactables:FindFirstChild("GiftBobCam"))
+    end
+    return count
+end
+
+function Extra.sweepPerfUpgradeBoards()
+    local count = Extra.hidePerfTree(Extra.findPath(Workspace, { "World", "Map", "MainUpgrades" }))
+    local world = Workspace:FindFirstChild("World")
+    if world then
+        for _, item in ipairs(world:GetDescendants()) do
+            if tostring(item.Name):find("Upgrade", 1, true) then
+                count += Extra.hidePerfTree(item)
+            end
+        end
+    end
+    return count
+end
+
+function Extra.sweepPerfTopki()
+    local count = 0
+    local topki = Extra.findPath(Workspace, { "World", "Topki" })
+    if topki then
+        for _, child in ipairs(topki:GetChildren()) do
+            local name = tostring(child.Name):lower()
+            if name:find("leaderboard", 1, true)
+                or name:find("donat", 1, true)
+                or name:find("contrib", 1, true) then
+                count += Extra.hidePerfTree(child)
+            end
+        end
+    end
+    return count
+end
+
+function Extra.sweepPerfHud()
+    local count = 0
+    local gui = Extra.perfMainGui()
+    if gui then
+        count += Extra.setPerfGuiRoot(gui:FindFirstChild("Stats"), Extra.perfToggle("TogglePerfHideStats", true))
+        count += Extra.setPerfGuiRoot(gui:FindFirstChild("Boosts"), Extra.perfToggle("TogglePerfHideBoosts", true))
+        count += Extra.setPerfGuiRoot(gui:FindFirstChild("Lvl"), Extra.perfToggle("TogglePerfHideTopHud", true))
+        count += Extra.setPerfGuiRoot(gui:FindFirstChild("Capacity"), Extra.perfToggle("TogglePerfHideTopHud", true))
+        count += Extra.setPerfGuiRoot(gui:FindFirstChild("Abilities"), Extra.perfToggle("TogglePerfHideButtons", true))
+        count += Extra.setPerfGuiRoot(gui:FindFirstChild("Options"), Extra.perfToggle("TogglePerfHideButtons", true))
+        count += Extra.setPerfGuiRoot(gui:FindFirstChild("DailyQuestHud"), Extra.perfToggle("TogglePerfHideInfo", true))
+    end
+
+    count += Extra.setPerfGuiRoot(Extra.perfPlayerGui() and Extra.perfPlayerGui():FindFirstChild("InfoInterface"), Extra.perfToggle("TogglePerfHideInfo", true))
+    return count
+end
+
+function Extra.isPerfCurrencyPopupText(text)
+    local upper = tostring(text or ""):upper()
+    return upper:find("GODLY ESSENCE", 1, true)
+        or upper:find("POWER", 1, true)
+        or upper:match("%f[%w]GE%f[%W]")
+        or (upper:match("%f[%w]P%f[%W]") and (upper:find("+", 1, true) or upper:find("%d")))
+end
+
+function Extra.hidePerfCurrencyPopupText(label)
+    if not (label and (label:IsA("TextLabel") or label:IsA("TextButton"))) then
+        return 0
+    end
+    if not Extra.isPerfCurrencyPopupText(label.Text) then
+        return 0
+    end
+
+    Extra.safeSet(label, "Visible", false)
+    Extra.safeSet(label, "TextTransparency", 1)
+    Extra.safeSet(label, "TextStrokeTransparency", 1)
+    return 1
+end
+
+function Extra.sweepPerfPopups()
+    local count = 0
+    local gui = Extra.perfPlayerGui()
+    local main = Extra.perfMainGui()
+    local roots = {}
+    local announcements = main and main:FindFirstChild("Announcements")
+    local popUpScreen = gui and gui:FindFirstChild("PopUpScreen")
+    if announcements then
+        roots[#roots + 1] = announcements
+    end
+    if popUpScreen then
+        roots[#roots + 1] = popUpScreen
+    end
+
+    for _, root in ipairs(roots) do
+        if root then
+            for _, item in ipairs(root:GetDescendants()) do
+                count += Extra.hidePerfCurrencyPopupText(item)
+            end
+        end
+    end
+    return count
+end
+
+function Extra.sweepPerformance()
+    if not Extra.perfToggle("TogglePerfMaster", false) then
+        return 0
+    end
+
+    local count = 0
+    if Extra.perfToggle("TogglePerfVfx", true) then
+        count += Extra.sweepPerfVfx()
+    end
+    if Extra.perfToggle("TogglePerfHideSlimes", true) then
+        count += Extra.sweepPerfSlimes()
+    end
+    if Extra.perfToggle("TogglePerfHideCleanbots", true) then
+        count += Extra.sweepPerfCleanbots()
+    end
+    if Extra.perfToggle("TogglePerfHideBobs", true) then
+        count += Extra.sweepPerfBobs()
+    end
+    if Extra.perfToggle("TogglePerfHideGemBob", true) then
+        count += Extra.hidePerfTree(Workspace:FindFirstChild("GemBob"))
+    end
+    if Extra.perfToggle("TogglePerfHideBoards", true) then
+        count += Extra.sweepPerfUpgradeBoards()
+    end
+    if Extra.perfToggle("TogglePerfHideTopki", true) then
+        count += Extra.sweepPerfTopki()
+    end
+    count += Extra.sweepPerfHud()
+    if Extra.perfToggle("TogglePerfHidePopups", true) then
+        count += Extra.sweepPerfPopups()
+    end
+
+    Marker:SetAttribute("PerformanceLastTouched", count)
+    Marker:SetAttribute("PerformanceLastSweepAt", Workspace:GetServerTimeNow())
+    Extra.setPerfStatus("Last sweep touched " .. tostring(count) .. " item(s).")
+    return count
+end
+
+function Extra.showPerformanceHud()
+    local gui = Extra.perfMainGui()
+    if gui then
+        for _, name in ipairs({ "Stats", "Boosts", "Lvl", "Capacity", "Abilities", "Options", "DailyQuestHud" }) do
+            Extra.setPerfGuiRoot(gui:FindFirstChild(name), false)
+        end
+    end
+    Extra.setPerfGuiRoot(Extra.perfPlayerGui() and Extra.perfPlayerGui():FindFirstChild("InfoInterface"), false)
+end
+
+function Extra.stopPerformance()
+    stopTask("Performance")
+    Marker:SetAttribute("PerformanceEnabled", false)
+    Extra.showPerformanceHud()
+    Extra.setPerfStatus("Performance mode is off.")
+end
+
+function Extra.startPerformance()
+    stopTask("Performance")
+    Marker:SetAttribute("PerformanceEnabled", true)
+    Extra.sweepPerformance()
+    Tasks.Performance = task.spawn(function()
+        while Extra.perfToggle("TogglePerfMaster", false) do
+            Extra.sweepPerformance()
+            task.wait(math.max(0.25, Extra.perfOption("PerfSweepInterval", 1)))
+        end
+        Extra.showPerformanceHud()
+        Marker:SetAttribute("PerformanceEnabled", false)
+    end)
+end
+
+function Extra.refreshPerformance()
+    if Extra.perfToggle("TogglePerfMaster", false) then
+        Extra.startPerformance()
+    else
+        Extra.stopPerformance()
+    end
+end
+
 local Window = Library:CreateWindow({
     Title = "slimeinc v" .. Extra.Version,
     Footer = "disc : neonbeon | slimeinc v" .. Extra.Version,
@@ -3182,6 +3572,7 @@ local Window = Library:CreateWindow({
 local Tabs = {
     Main = Window:AddTab("Main", "house"),
     Automation = Window:AddTab("Automation", "bot"),
+    Performance = Window:AddTab("Performance", "gauge"),
     Blessings = Window:AddTab("Blessings", "sparkles"),
     AutoUpgrade = Window:AddTab("Auto Upgrade", "circle-arrow-up"),
     ["UI Settings"] = Window:AddTab("UI Settings", "folder-cog"),
@@ -3198,6 +3589,109 @@ do
     local AutoUpgradeControlsBox = Tabs.AutoUpgrade:AddLeftGroupbox("Controls", "power")
     AutoUpgradeControlsBox:AddCheckbox("ToggleAutoUpgradesMaster", {
         Text = "Enable Auto Upgrades",
+        Default = true,
+    })
+end
+
+do
+    local PerfCoreBox = Tabs.Performance:AddLeftGroupbox("Core", "gauge")
+    PerfCoreBox:AddCheckbox("TogglePerfMaster", {
+        Text = "Enable FPS Boost",
+        Default = false,
+    })
+    PerfCoreBox:AddCheckbox("TogglePerfVfx", {
+        Text = "Disable VFX",
+        Default = true,
+    })
+    PerfCoreBox:AddCheckbox("TogglePerfNoShadows", {
+        Text = "No Shadows",
+        Default = true,
+    })
+    PerfCoreBox:AddCheckbox("TogglePerfLowQuality", {
+        Text = "Low Render Quality",
+        Default = true,
+    })
+    PerfCoreBox:AddSlider("PerfSweepInterval", {
+        Text = "Sweep Interval",
+        Min = 0.25,
+        Max = 5,
+        Default = 1,
+        Rounding = 2,
+        Suffix = " s",
+    })
+    PerfCoreBox:AddButton({
+        Text = "Apply Once",
+        Func = function()
+            task.spawn(function()
+                notify("Performance sweep touched: " .. tostring(Extra.sweepPerformance()))
+            end)
+        end,
+    })
+    PerfCoreBox:AddButton({
+        Text = "Show HUD",
+        Func = function()
+            Extra.showPerformanceHud()
+            notify("HUD roots shown. World hides restore on rejoin.")
+        end,
+    })
+    Extra.PerformanceStatusLabel = PerfCoreBox:AddLabel({
+        Text = "Performance mode is off.",
+        DoesWrap = true,
+    })
+end
+
+do
+    local PerfWorldBox = Tabs.Performance:AddRightGroupbox("World", "eye-off")
+    PerfWorldBox:AddCheckbox("TogglePerfHideSlimes", {
+        Text = "Hide Slimes",
+        Default = true,
+    })
+    PerfWorldBox:AddCheckbox("TogglePerfHideCleanbots", {
+        Text = "Hide Cleanbots",
+        Default = true,
+    })
+    PerfWorldBox:AddCheckbox("TogglePerfHideBobs", {
+        Text = "Hide Bob Followers",
+        Default = true,
+    })
+    PerfWorldBox:AddCheckbox("TogglePerfHideGemBob", {
+        Text = "Hide Gem Bob",
+        Default = true,
+    })
+    PerfWorldBox:AddCheckbox("TogglePerfHideBoards", {
+        Text = "Hide Upgrade Boards",
+        Default = true,
+    })
+    PerfWorldBox:AddCheckbox("TogglePerfHideTopki", {
+        Text = "Hide Leaderboards / Donate",
+        Default = true,
+    })
+end
+
+do
+    local PerfHudBox = Tabs.Performance:AddLeftGroupbox("HUD", "sliders-horizontal")
+    PerfHudBox:AddCheckbox("TogglePerfHideStats", {
+        Text = "Hide Currency HUD",
+        Default = true,
+    })
+    PerfHudBox:AddCheckbox("TogglePerfHideBoosts", {
+        Text = "Hide Boost Icons",
+        Default = true,
+    })
+    PerfHudBox:AddCheckbox("TogglePerfHideTopHud", {
+        Text = "Hide Level / Capacity",
+        Default = true,
+    })
+    PerfHudBox:AddCheckbox("TogglePerfHideButtons", {
+        Text = "Hide Buttons",
+        Default = true,
+    })
+    PerfHudBox:AddCheckbox("TogglePerfHideInfo", {
+        Text = "Hide Server Info",
+        Default = true,
+    })
+    PerfHudBox:AddCheckbox("TogglePerfHidePopups", {
+        Text = "Hide GE / P Popups",
         Default = true,
     })
 end
@@ -3853,11 +4347,53 @@ Options.PlayerSpeed:OnChanged(function()
         applyPlayerSpeed()
     end
 end)
+Options.PerfSweepInterval:OnChanged(function()
+    if Toggles.TogglePerfMaster and Toggles.TogglePerfMaster.Value then
+        Extra.sweepPerformance()
+    end
+end)
+
+Toggles.TogglePerfMaster:OnChanged(function(state)
+    if state then
+        Extra.startPerformance()
+    else
+        Extra.stopPerformance()
+    end
+end)
+
+function Extra.bindPerformanceToggle(toggleId)
+    local toggle = Toggles[toggleId]
+    if toggle then
+        toggle:OnChanged(function()
+            if Toggles.TogglePerfMaster and Toggles.TogglePerfMaster.Value then
+                Extra.sweepPerformance()
+            else
+                Extra.showPerformanceHud()
+            end
+        end)
+    end
+end
+Extra.bindPerformanceToggle("TogglePerfVfx")
+Extra.bindPerformanceToggle("TogglePerfNoShadows")
+Extra.bindPerformanceToggle("TogglePerfLowQuality")
+Extra.bindPerformanceToggle("TogglePerfHideSlimes")
+Extra.bindPerformanceToggle("TogglePerfHideCleanbots")
+Extra.bindPerformanceToggle("TogglePerfHideBobs")
+Extra.bindPerformanceToggle("TogglePerfHideGemBob")
+Extra.bindPerformanceToggle("TogglePerfHideBoards")
+Extra.bindPerformanceToggle("TogglePerfHideTopki")
+Extra.bindPerformanceToggle("TogglePerfHideStats")
+Extra.bindPerformanceToggle("TogglePerfHideBoosts")
+Extra.bindPerformanceToggle("TogglePerfHideTopHud")
+Extra.bindPerformanceToggle("TogglePerfHideButtons")
+Extra.bindPerformanceToggle("TogglePerfHideInfo")
+Extra.bindPerformanceToggle("TogglePerfHidePopups")
 
 Library:OnUnload(function()
     Marker:SetAttribute("Session", "unloaded-" .. tostring(os.clock()))
     Marker:SetAttribute("Enabled", false)
     stopPlayerSpeed()
+    Extra.stopPerformance()
 
     for name in pairs(Tasks) do
         stopTask(name)
@@ -3975,6 +4511,9 @@ if Toggles.ToggleAutoCleanbotRoll.Value then
 end
 if Toggles.TogglePlayerSpeed.Value then
     startPlayerSpeed()
+end
+if Toggles.TogglePerfMaster.Value then
+    Extra.startPerformance()
 end
 if anyAutoUpgradeEnabled() then
     startAutoUpgradeLoop()
