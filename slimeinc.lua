@@ -1900,7 +1900,7 @@ end
 
 function Extra.bestBlessingOption(options)
     if typeof(options) ~= "table" then
-        return nil
+        return nil, false
     end
 
     local offered = {}
@@ -1920,14 +1920,14 @@ function Extra.bestBlessingOption(options)
 
     for _, label in ipairs(Extra.BlessingPickPriority or {}) do
         if offeredByLabel[label] then
-            return offeredByLabel[label]
+            return offeredByLabel[label], true
         end
     end
 
     if #offered < 1 then
-        return nil
+        return nil, false
     end
-    return offered[math.random(1, #offered)]
+    return offered[math.random(1, #offered)], false
 end
 
 function Extra.findSacrificialBlessing(profile)
@@ -1980,11 +1980,11 @@ function Extra.connectBlessingEvents()
         Marker:SetAttribute("BlessingLastResultAt", now)
 
         if success and typeof(options) == "table" then
-            Extra.BlessingRetryAfter = now + 0.5
+            Extra.BlessingRetryAfter = now + 0.1
             Extra.BlessingPendingOptions = options
-            Extra.setBlessingStatus("Blessing options received. Selecting the best safe card...")
+            Extra.setBlessingStatus("Blessing options received. Evaluating priorities...")
         elseif success then
-            Extra.BlessingRetryAfter = now + 0.75
+            Extra.BlessingRetryAfter = now + 0.1
             Extra.BlessingPendingOptions = nil
             Extra.setBlessingStatus("Blessing choice accepted.")
         else
@@ -2024,14 +2024,37 @@ function Extra.autoBlessingStep(forceRoll)
     end
 
     if typeof(options) == "table" then
-        local choice = Extra.bestBlessingOption(options)
+        local choice, matchedPriority = Extra.bestBlessingOption(options)
         if not choice then
             Extra.setBlessingStatus("No recognized blessing card was offered.")
             return false
         end
 
+        local autoReroll = Toggles.ToggleAutoBlessingReroll and Toggles.ToggleAutoBlessingReroll.Value
+        if autoReroll and #(Extra.BlessingPickPriority or {}) > 0 and not matchedPriority then
+            local profile = getProfileData()
+            local gemEnergy = profile and (tonumber(profile.gemEnergy) or 0) or 0
+            if gemEnergy < 10 then
+                Extra.setBlessingStatus(string.format("Need 10 GE to reroll choices. Current GE: %s", tostring(gemEnergy)))
+                return false
+            end
+
+            local pendingRerollRemote = getRemote("RerollPendingBlessings", 10)
+            if not pendingRerollRemote then
+                Extra.setBlessingStatus("RerollPendingBlessings remote was not found.")
+                return false
+            end
+
+            Extra.BlessingPendingOptions = nil
+            Extra.markBlessingActionPending(1.5)
+            pendingRerollRemote:FireServer()
+            Marker:SetAttribute("BlessingLastPendingRerollAt", now)
+            Extra.setBlessingStatus("Rerolling offered choices without sacrificing...")
+            return true
+        end
+
         Extra.BlessingPendingOptions = nil
-        Extra.markBlessingActionPending(4)
+        Extra.markBlessingActionPending(1.5)
         local controller = Extra.getBlessingController()
         local usedController = false
         if controller and typeof(controller.getPendingOptions) == "function" and typeof(controller.pick) == "function" then
@@ -2058,7 +2081,7 @@ function Extra.autoBlessingStep(forceRoll)
     local autoRoll = forceRoll == true or (Toggles.ToggleAutoBlessing and Toggles.ToggleAutoBlessing.Value)
     local autoSacrifice = Toggles.ToggleAutoBlessingSacrifice and Toggles.ToggleAutoBlessingSacrifice.Value
     if (autoRoll or autoSacrifice) and (tonumber(profile.blessingSlots) or 0) > 0 then
-        Extra.markBlessingActionPending(4)
+        Extra.markBlessingActionPending(1.5)
         activateRemote:FireServer()
         Extra.setBlessingStatus("Rolling an available blessing slot...")
         return true
@@ -2077,7 +2100,7 @@ function Extra.autoBlessingStep(forceRoll)
 
     local sacrifice = Extra.findSacrificialBlessing(profile)
     if sacrifice then
-        Extra.markBlessingActionPending(4)
+        Extra.markBlessingActionPending(1.5)
         rerollRemote:FireServer(sacrifice.key)
         Extra.setBlessingStatus("Sacrificing " .. sacrifice.label .. " for a new roll.")
         Marker:SetAttribute("BlessingLastSacrifice", sacrifice.key)
@@ -2091,6 +2114,7 @@ end
 function Extra.autoBlessingEnabled()
     return (Toggles.ToggleAutoBlessing and Toggles.ToggleAutoBlessing.Value)
         or (Toggles.ToggleAutoBlessingSacrifice and Toggles.ToggleAutoBlessingSacrifice.Value)
+        or (Toggles.ToggleAutoBlessingReroll and Toggles.ToggleAutoBlessingReroll.Value)
 end
 
 function Extra.startAutoBlessing()
@@ -2099,7 +2123,7 @@ function Extra.startAutoBlessing()
     Tasks.AutoBlessing = task.spawn(function()
         while Extra.autoBlessingEnabled() do
             Extra.autoBlessingStep()
-            task.wait(0.15)
+            task.wait(0.03)
         end
     end)
 end
@@ -3166,6 +3190,10 @@ AutoBlessingBox:AddCheckbox("ToggleAutoBlessingSacrifice", {
     Text = "Auto Sacrifice (10 GE)",
     Default = false,
 })
+AutoBlessingBox:AddCheckbox("ToggleAutoBlessingReroll", {
+    Text = "Auto Reroll Choices (10 GE)",
+    Default = false,
+})
 AutoBlessingBox:AddButton({
     Text = "Run One Step",
     Func = function()
@@ -3609,6 +3637,9 @@ Toggles.ToggleAutoBlessing:OnChanged(function(state)
     Extra.refreshAutoBlessing()
 end)
 Toggles.ToggleAutoBlessingSacrifice:OnChanged(function(state)
+    Extra.refreshAutoBlessing()
+end)
+Toggles.ToggleAutoBlessingReroll:OnChanged(function(state)
     Extra.refreshAutoBlessing()
 end)
 Toggles.ToggleAutoGodlyOrb:OnChanged(function(state)
