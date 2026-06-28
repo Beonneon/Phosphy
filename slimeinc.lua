@@ -69,6 +69,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
+    Version = "1.1.0",
     BlessingActionPending = false,
     BlessingActionSerial = 0,
     CleanbotRollPending = false,
@@ -3168,8 +3169,8 @@ local function stopCollector()
 end
 
 local Window = Library:CreateWindow({
-    Title = "slimeinc",
-    Footer = "disc : neonbeon | slimeinc",
+    Title = "slimeinc v" .. Extra.Version,
+    Footer = "disc : neonbeon | slimeinc v" .. Extra.Version,
     Icon = 111288992980872,
     Compact = true,
     SidebarCompactWidth = 56,
