@@ -87,7 +87,7 @@ local MidasLastCollectAt = {}
 local PalCollectionActive = false
 local AutofarmCFrame = CFrame.new(
     -5.32521152,
-    -76.5,
+    4.3090837,
     -6.48988485,
     0.99855119,
     0.014181748,
@@ -494,14 +494,14 @@ local function getPriorityMovementTarget()
     end
 
     if FallingStarMovePosition and os.clock() <= FallingStarMoveUntil then
-        return CFrame.new(FallingStarMovePosition), "Falling Star"
+        return CFrame.new(FallingStarMovePosition + Vector3.new(0, 3, 0)), "Falling Star"
     end
 
     FallingStarMovePosition = nil
     FallingStarMoveUntil = 0
 
     if MidasMovePosition and os.clock() <= MidasMoveUntil then
-        return CFrame.new(MidasMovePosition), "Midas Bar"
+        return CFrame.new(MidasMovePosition + Vector3.new(0, 3, 0)), "Midas Bar"
     end
 
     MidasMovePosition = nil
@@ -664,7 +664,7 @@ local function collectAllPals()
             if targetCFrame and currentRoot then
                 currentRoot.AssemblyLinearVelocity = Vector3.zero
                 currentRoot.AssemblyAngularVelocity = Vector3.zero
-                currentRoot.CFrame = targetCFrame
+                currentRoot.CFrame = targetCFrame + Vector3.new(0, 3, 0)
                 task.wait(0.25)
                 remote:FireServer(definition.key)
                 fired += 1
@@ -1167,7 +1167,7 @@ local function collectFallingStarPart(part)
 
     local holdSeconds = 0.25
     setFallingStarMovementTarget(part.Position, holdSeconds + 0.15)
-    root.CFrame = CFrame.new(part.Position)
+    root.CFrame = CFrame.new(part.Position + Vector3.new(0, 3, 0))
     task.wait(holdSeconds)
 
     if typeof(firetouchinterest) == "function" then
@@ -1187,7 +1187,7 @@ local function collectFallingStarPosition(position, holdSeconds)
 
     holdSeconds = math.max(0.4, tonumber(holdSeconds) or 0.4)
     setFallingStarMovementTarget(position, holdSeconds)
-    root.CFrame = CFrame.new(position)
+    root.CFrame = CFrame.new(position + Vector3.new(0, 3, 0))
     task.wait(math.min(0.25, holdSeconds))
 
     return true
@@ -1391,7 +1391,7 @@ local function collectMidasGoldBar(id, position)
         if root then
             root.AssemblyLinearVelocity = Vector3.zero
             root.AssemblyAngularVelocity = Vector3.zero
-            root.CFrame = CFrame.new(targetPosition)
+            root.CFrame = CFrame.new(targetPosition + Vector3.new(0, 3, 0))
         end
 
         task.wait(0.2)
@@ -2733,12 +2733,12 @@ function Extra.getCSlimeBaseplateCFrame()
     end
 
     if baseplate:IsA("BasePart") then
-        return baseplate.CFrame
+        return baseplate.CFrame * CFrame.new(0, (baseplate.Size.Y / 2) + 2.5, 0)
     end
 
     local part = baseplate:FindFirstChildWhichIsA("BasePart", true)
     if part then
-        return part.CFrame
+        return part.CFrame * CFrame.new(0, (part.Size.Y / 2) + 2.5, 0)
     end
     return Extra.instanceCFrame(baseplate)
 end
