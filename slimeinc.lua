@@ -73,6 +73,8 @@ local Extra = {
     BlessingActionSerial = 0,
     CleanbotRollPending = false,
     CleanbotRollSerial = 0,
+    SpawnIdQueue = {},
+    SpawnIdQueued = {},
 }
 local ReadyActionLastFiredAt = {}
 local PotionRequestedUntil = {}
@@ -866,6 +868,106 @@ local function collectIds(ids)
 
     collectSlimes:FireServer(ids)
     return true
+end
+
+function Extra.queueSpawnId(id, spawnCFrame)
+    if typeof(id) ~= "string" or id == "" or Extra.SpawnIdQueued[id] then
+        return false
+    end
+
+    local position = nil
+    if typeof(spawnCFrame) == "CFrame" then
+        position = spawnCFrame.Position
+    elseif typeof(spawnCFrame) == "Vector3" then
+        position = spawnCFrame
+    end
+
+    Extra.SpawnIdQueued[id] = true
+    Extra.SpawnIdQueue[#Extra.SpawnIdQueue + 1] = {
+        id = id,
+        position = position,
+    }
+    return true
+end
+
+function Extra.flushSpawnIds()
+    if #Extra.SpawnIdQueue == 0 then
+        return 0
+    end
+
+    local root = getRoot()
+    if not root then
+        return 0
+    end
+
+    local now = os.clock()
+    local radius = getRadius()
+    local collectAll = Toggles.ToggleCollectAll and Toggles.ToggleCollectAll.Value
+    local batchSize = getBatchSize()
+    local ids = {}
+
+    while #ids < batchSize and #Extra.SpawnIdQueue > 0 do
+        local entry = table.remove(Extra.SpawnIdQueue, 1)
+        Extra.SpawnIdQueued[entry.id] = nil
+
+        local inRange = entry.position == nil or (entry.position - root.Position).Magnitude <= radius
+        if collectAll or inRange then
+            LastSentAt[entry.id] = now
+            ids[#ids + 1] = entry.id
+        end
+    end
+
+    if collectIds(ids) then
+        Marker:SetAttribute("InstantSpawnLastBatch", #ids)
+        Marker:SetAttribute("InstantSpawnLastFireAt", Workspace:GetServerTimeNow())
+        return #ids
+    end
+
+    return 0
+end
+
+function Extra.stopInstantSpawnCollector()
+    stopTask("InstantSpawnCollector")
+    disconnect("InstantSlimeSpawned")
+    disconnect("InstantSlimeSpawnedBatch")
+    table.clear(Extra.SpawnIdQueue)
+    table.clear(Extra.SpawnIdQueued)
+    Marker:SetAttribute("InstantSpawnCollector", false)
+end
+
+function Extra.startInstantSpawnCollector()
+    Extra.stopInstantSpawnCollector()
+
+    local spawned = getRemote("SlimeSpawned", 10)
+    local spawnedBatch = getRemote("SlimeSpawnedBatch", 10)
+    if not spawned or not spawnedBatch then
+        notify("Slime spawn remotes were not found.")
+        return
+    end
+
+    Marker:SetAttribute("InstantSpawnCollector", true)
+    Connections.InstantSlimeSpawned = spawned.OnClientEvent:Connect(function(id, spawnCFrame)
+        Extra.queueSpawnId(id, spawnCFrame)
+    end)
+    Connections.InstantSlimeSpawnedBatch = spawnedBatch.OnClientEvent:Connect(function(payloads)
+        if typeof(payloads) ~= "table" then
+            return
+        end
+
+        for _, payload in pairs(payloads) do
+            if typeof(payload) == "table" then
+                Extra.queueSpawnId(payload.id, payload.cf)
+            end
+        end
+    end)
+
+    Tasks.InstantSpawnCollector = task.spawn(function()
+        while Toggles.ToggleHugeCollector and Toggles.ToggleHugeCollector.Value
+            and Toggles.ToggleInstantSpawnCollector and Toggles.ToggleInstantSpawnCollector.Value do
+            Extra.flushSpawnIds()
+            task.wait(getTickDelay())
+        end
+    end)
 end
 
 local function collectNearbyOnce()
@@ -3040,6 +3142,9 @@ local function startCollector()
     stopTask("Collector")
     updateMarker()
     startRingVisual()
+    if Toggles.ToggleInstantSpawnCollector and Toggles.ToggleInstantSpawnCollector.Value then
+        Extra.startInstantSpawnCollector()
+    end
 
     Tasks.Collector = task.spawn(function()
         while Marker:GetAttribute("Session") == Session
@@ -3059,6 +3164,7 @@ end
 local function stopCollector()
     Marker:SetAttribute("Enabled", false)
     stopTask("Collector")
+    Extra.stopInstantSpawnCollector()
 end
 
 local Window = Library:CreateWindow({
@@ -3222,6 +3328,10 @@ end
 local CollectorBox = Tabs.Main:AddLeftGroupbox("Collector", "magnet")
 CollectorBox:AddCheckbox("ToggleHugeCollector", {
     Text = "Auto Collect Slimes",
+    Default = true,
+})
+CollectorBox:AddCheckbox("ToggleInstantSpawnCollector", {
+    Text = "Instant Spawn Collection",
     Default = true,
 })
 CollectorBox:AddCheckbox("ToggleActualRing", {
@@ -3596,6 +3706,14 @@ Toggles.ToggleHugeCollector:OnChanged(function(state)
         startCollector()
     else
         stopCollector()
+    end
+end)
+
+Toggles.ToggleInstantSpawnCollector:OnChanged(function(state)
+    if state and Toggles.ToggleHugeCollector and Toggles.ToggleHugeCollector.Value then
+        Extra.startInstantSpawnCollector()
+    else
+        Extra.stopInstantSpawnCollector()
     end
 end)
 
