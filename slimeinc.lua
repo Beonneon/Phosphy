@@ -1764,6 +1764,11 @@ local function purchaseUpgradeBoard(board)
 end
 
 local function anyAutoUpgradeEnabled()
+    local masterToggle = Toggles.ToggleAutoUpgradesMaster
+    if masterToggle and not masterToggle.Value then
+        return false
+    end
+
     for _, board in ipairs(AutoUpgradeBoards) do
         local toggle = Toggles[upgradeToggleId(board)]
         if toggle and toggle.Value then
@@ -3082,6 +3087,14 @@ local AutoUpgradeTabboxGroups = {
     { title = "Endgame Boards", side = "Right", indexes = { 10, 11 } },
 }
 
+do
+    local AutoUpgradeControlsBox = Tabs.AutoUpgrade:AddLeftGroupbox("Controls", "power")
+    AutoUpgradeControlsBox:AddCheckbox("ToggleAutoUpgradesMaster", {
+        Text = "Enable Auto Upgrades",
+        Default = true,
+    })
+end
+
 local function addAutoUpgradeBoardTab(tabbox, board)
     local labels = upgradeBoardLabels(board)
     local boardTab = tabbox:AddTab(board.name, board.icon)
@@ -3576,6 +3589,7 @@ InfoBox:AddButton({
 for _, board in ipairs(AutoUpgradeBoards) do
     Toggles[upgradeToggleId(board)]:OnChanged(refreshAutoUpgradeLoop)
 end
+Toggles.ToggleAutoUpgradesMaster:OnChanged(refreshAutoUpgradeLoop)
 
 Toggles.ToggleHugeCollector:OnChanged(function(state)
     if state then
