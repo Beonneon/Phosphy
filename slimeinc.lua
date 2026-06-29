@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.1",
+    Version = "1.3.2",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -76,6 +76,9 @@ local Extra = {
     CleanbotRollSerial = 0,
     SpawnIdQueue = {},
     SpawnIdQueued = {},
+    AutoMidasGoldCount = 0,
+    AutoMidasGoldCountSource = "manual",
+    AutoMidasHeldGoldBar = nil,
     BuffComboMidasCount = 0,
     BuffComboMidasCountSource = "fallback/manual",
     BuffComboHeldGoldBar = nil,
@@ -1619,6 +1622,61 @@ local function collectMidasGoldBar(id, position)
     return true
 end
 
+function Extra.setAutoMidasStatus(message)
+    local text = tostring(message)
+    Marker:SetAttribute("AutoMidasStatus", text)
+    Marker:SetAttribute("AutoMidasGoldCount", Extra.AutoMidasGoldCount)
+    Marker:SetAttribute("AutoMidasGoldCountSource", Extra.AutoMidasGoldCountSource)
+    Marker:SetAttribute("AutoMidasHeldGoldBar", Extra.AutoMidasHeldGoldBar ~= nil)
+
+    if Extra.AutoMidasStatusLabel then
+        pcall(function()
+            Extra.AutoMidasStatusLabel:SetText(text)
+        end)
+    end
+end
+
+function Extra.resetAutoMidasCount()
+    Extra.AutoMidasGoldCount = math.clamp(math.floor(getNumberOption("AutoMidasGoldStartCount", 0)), 0, 9)
+    Extra.AutoMidasGoldCountSource = "manual"
+    Extra.AutoMidasHeldGoldBar = nil
+    Extra.setAutoMidasStatus("Auto Midas count: " .. tostring(Extra.AutoMidasGoldCount) .. "/10.")
+end
+
+function Extra.collectAutoMidasGoldBar(id, position)
+    if Toggles.ToggleAutoMidasHoldAt9 and Toggles.ToggleAutoMidasHoldAt9.Value
+        and Extra.AutoMidasGoldCount >= 9 then
+        Extra.AutoMidasHeldGoldBar = {
+            id = id,
+            position = position,
+            receivedAt = os.clock(),
+        }
+        Extra.setAutoMidasStatus("Holding Midas bar at 9/10.")
+        return true
+    end
+
+    task.spawn(function()
+        if collectMidasGoldBar(id, position) then
+            Extra.AutoMidasGoldCount = math.clamp(Extra.AutoMidasGoldCount + 1, 0, 10)
+            Extra.AutoMidasGoldCountSource = "observed"
+            Extra.AutoMidasHeldGoldBar = nil
+            Extra.setAutoMidasStatus("Collected Midas bar: "
+                .. tostring(Extra.AutoMidasGoldCount) .. "/10.")
+        end
+    end)
+    return true
+end
+
+function Extra.collectHeldAutoMidasGoldBar()
+    local held = Extra.AutoMidasHeldGoldBar
+    if not held then
+        return false
+    end
+
+    Extra.AutoMidasHeldGoldBar = nil
+    return Extra.collectAutoMidasGoldBar(held.id, held.position)
+end
+
 local function connectMidasGoldEvents()
     local spawned = getRemote("GoldBarSpawned", 10)
     if spawned and not Connections.MidasGoldBarSpawned then
@@ -1628,7 +1686,7 @@ local function connectMidasGoldEvents()
                 return
             end
             if Toggles.ToggleAutoMidasGold and Toggles.ToggleAutoMidasGold.Value then
-                task.spawn(collectMidasGoldBar, id, position)
+                Extra.collectAutoMidasGoldBar(id, position)
             end
         end)
     end
@@ -1638,6 +1696,18 @@ local function connectMidasGoldEvents()
         Connections.MidasGoldBarCleared = cleared.OnClientEvent:Connect(function(id)
             if typeof(id) == "string" or typeof(id) == "number" then
                 MidasLastCollectAt[tostring(id)] = nil
+            end
+        end)
+    end
+
+    local boostActivated = getRemote("BoostActivated", 10)
+    if boostActivated and not Connections.MidasBoostActivated then
+        Connections.MidasBoostActivated = boostActivated.OnClientEvent:Connect(function(boostId, expiresAt)
+            if boostId == "midasBob" and typeof(expiresAt) == "number" and expiresAt > os.time() then
+                Extra.AutoMidasGoldCount = 0
+                Extra.AutoMidasGoldCountSource = "boost-reset"
+                Extra.AutoMidasHeldGoldBar = nil
+                Extra.setAutoMidasStatus("Midas boost activated. Auto Midas count reset to 0/10.")
             end
         end)
     end
@@ -3070,9 +3140,12 @@ function Extra.updateBuffComboInfo()
     end
 
     local profileMidasCount, profileMidasSource = Extra.profileMidasCount()
-    local midasCount = profileMidasCount or Extra.BuffComboMidasCount or 0
-    local midasSource = profileMidasSource and ("profile:" .. tostring(profileMidasSource))
-        or tostring(Extra.BuffComboMidasCountSource or "fallback")
+    local useProfileMidas = Toggles.ToggleBuffComboAutoTrackMidas
+        and Toggles.ToggleBuffComboAutoTrackMidas.Value
+        and profileMidasCount ~= nil
+    local midasCount = useProfileMidas and profileMidasCount or Extra.BuffComboMidasCount or 0
+    local midasSource = useProfileMidas and ("profile:" .. tostring(profileMidasSource))
+        or tostring(Extra.BuffComboMidasCountSource or "manual/observed")
     if isBoostActive("midasBob") == true then
         midasCount = 10
         midasSource = "midas boost active"
@@ -5110,6 +5183,35 @@ MidasBox:AddCheckbox("ToggleAutoMidasGold", {
     Text = "Auto Golden Ingot",
     Default = true,
 })
+MidasBox:AddSlider("AutoMidasGoldStartCount", {
+    Text = "Start Count",
+    Min = 0,
+    Max = 9,
+    Default = 0,
+    Rounding = 0,
+})
+MidasBox:AddCheckbox("ToggleAutoMidasHoldAt9", {
+    Text = "Hold At 9/10",
+    Default = false,
+})
+MidasBox:AddButton({
+    Text = "Reset Midas Count",
+    Func = function()
+        Extra.resetAutoMidasCount()
+    end,
+})
+MidasBox:AddButton({
+    Text = "Collect Held Bar",
+    Func = function()
+        notify(Extra.collectHeldAutoMidasGoldBar()
+            and "Held Midas bar collect fired."
+            or "No held Midas bar.")
+    end,
+})
+Extra.AutoMidasStatusLabel = MidasBox:AddLabel({
+    Text = "Auto Midas count: 0/10.",
+    DoesWrap = true,
+})
 
 do
 local BuffComboBox = Tabs.Automation:AddRightGroupbox("Buff Combo", "timer-reset")
@@ -5140,7 +5242,7 @@ BuffComboBox:AddCheckbox("ToggleBuffComboBuyPotion", {
 })
 BuffComboBox:AddCheckbox("ToggleBuffComboAutoTrackMidas", {
     Text = "Sync Profile Midas",
-    Default = true,
+    Default = false,
 })
 BuffComboBox:AddCheckbox("ToggleBuffComboRequireTotem", {
     Text = "Require Totem",
@@ -5415,6 +5517,11 @@ Toggles.ToggleAutoMidasGold:OnChanged(function(state)
         connectMidasGoldEvents()
     end
 end)
+Toggles.ToggleAutoMidasHoldAt9:OnChanged(function(state)
+    if not state and Toggles.ToggleAutoMidasGold and Toggles.ToggleAutoMidasGold.Value then
+        Extra.collectHeldAutoMidasGoldBar()
+    end
+end)
 Toggles.ToggleBuffCombo:OnChanged(function(state)
     if state then
         Extra.startBuffCombo()
@@ -5440,6 +5547,12 @@ Options.CollectorBatchSize:OnChanged(updateMarker)
 Options.PlayerSpeed:OnChanged(function()
     if Toggles.TogglePlayerSpeed and Toggles.TogglePlayerSpeed.Value then
         applyPlayerSpeed()
+    end
+end)
+Options.AutoMidasGoldStartCount:OnChanged(function()
+    if Extra.AutoMidasGoldCountSource == "manual"
+        or Extra.AutoMidasGoldCountSource == "boost-reset" then
+        Extra.resetAutoMidasCount()
     end
 end)
 Options.BuffComboMidasStartCount:OnChanged(function()
@@ -5568,6 +5681,7 @@ startRingVisual()
 startMovementCoordinator()
 connectMidasGoldEvents()
 enableFastAmulets()
+Extra.resetAutoMidasCount()
 if Toggles.ToggleHugeCollector.Value then
     startCollector()
 end
