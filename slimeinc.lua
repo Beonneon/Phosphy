@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.2.5",
+    Version = "1.2.6",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -294,6 +294,34 @@ local function isBoostActive(boostId)
 
     local expiresAt = ActiveBoosts[boostId]
     return typeof(expiresAt) == "number" and os.time() < expiresAt
+end
+
+function Extra.getBoostRemainingSeconds(boostId)
+    local active = isBoostActive(boostId)
+    if active ~= true then
+        return active, 0
+    end
+
+    local expiresAt = ActiveBoosts[boostId]
+    if typeof(expiresAt) ~= "number" then
+        return true, nil
+    end
+
+    return true, math.max(0, expiresAt - os.time())
+end
+
+function Extra.formatShortSeconds(seconds)
+    if typeof(seconds) ~= "number" then
+        return ""
+    end
+
+    seconds = math.max(0, math.ceil(seconds))
+    local minutes = math.floor(seconds / 60)
+    local remainder = seconds % 60
+    if minutes > 0 then
+        return string.format(" (%d:%02d)", minutes, remainder)
+    end
+    return string.format(" (%ds)", remainder)
 end
 
 local function canFireReadyAction(name, minimumDelay)
@@ -2674,6 +2702,86 @@ function Extra.syncBuffComboMidasCount()
     return false
 end
 
+function Extra.boostActiveText(boostIds, positiveValue)
+    if typeof(boostIds) == "string" then
+        boostIds = { boostIds }
+    end
+
+    local sawUnknown = false
+    local profile = getProfileData()
+    local boosts = profile and profile.boosts
+    if typeof(boosts) == "table" then
+        applyBoostState(boosts)
+    end
+
+    for _, boostId in ipairs(boostIds) do
+        if positiveValue and typeof(ActiveBoosts[boostId]) == "number" and ActiveBoosts[boostId] > 0 then
+            return "active"
+        end
+
+        local active, remaining = Extra.getBoostRemainingSeconds(boostId)
+        if active == true then
+            return "active" .. Extra.formatShortSeconds(remaining)
+        end
+        if active == nil then
+            sawUnknown = true
+        end
+    end
+
+    return sawUnknown and "unknown" or "false"
+end
+
+function Extra.boolStatus(value)
+    if value == nil then
+        return "unknown"
+    end
+    return value and "true" or "false"
+end
+
+function Extra.updateBuffComboInfo()
+    if not Extra.BuffComboInfoLabel then
+        return
+    end
+
+    local profileMidasCount, profileMidasSource = Extra.profileMidasCount()
+    local midasCount = profileMidasCount or Extra.BuffComboMidasCount or 0
+    local midasSource = profileMidasSource and ("profile:" .. tostring(profileMidasSource))
+        or tostring(Extra.BuffComboMidasCountSource or "fallback")
+
+    local totemReady, totemId = Extra.hasKnownTotem()
+    local crateReady, crateStatus = Extra.getCrateReadiness()
+    local potion = Extra.getBuffComboPotion()
+    local potionStatus = potion and Extra.boostActiveText(potion.id) or "none"
+    local lines = {
+        "Midas boost: " .. Extra.boostActiveText("midasBob"),
+        "Midas bar: " .. tostring(math.clamp(math.floor(tonumber(midasCount) or 0), 0, 10))
+            .. "/10 (" .. midasSource .. ")",
+        "Totem: " .. Extra.boolStatus(totemReady)
+            .. (totemId and totemId ~= "active" and (" [" .. tostring(totemId) .. "]") or ""),
+        "Totem boost: " .. Extra.boostActiveText("totem", true),
+        "Crate boost: " .. Extra.boostActiveText({ "goldenCrateDrop", "crateDrop" }),
+        "Crate available: " .. Extra.boolStatus(crateReady),
+        "Crate status: " .. tostring(crateStatus),
+        "Potion: " .. tostring(potion and potion.label or "none") .. " - " .. potionStatus,
+    }
+    local text = table.concat(lines, "\n")
+
+    Marker:SetAttribute("BuffComboInfo", text)
+    pcall(function()
+        Extra.BuffComboInfoLabel:SetText(text)
+    end)
+end
+
+function Extra.startBuffComboInfoLoop()
+    stopTask("BuffComboInfo")
+    Tasks.BuffComboInfo = task.spawn(function()
+        while Marker:GetAttribute("Session") == Session do
+            Extra.updateBuffComboInfo()
+            task.wait(1)
+        end
+    end)
+end
+
 function Extra.purchaseComboPotionIfNeeded(potion)
     if not potion then
         return true, "No potion selected."
@@ -4681,6 +4789,10 @@ Extra.BuffComboStatusLabel = BuffComboBox:AddLabel({
     Text = "Buff combo is off.",
     DoesWrap = true,
 })
+Extra.BuffComboInfoLabel = BuffComboBox:AddLabel({
+    Text = "Midas boost: unknown\nMidas bar: 0/10\nTotem: unknown\nCrate boost: unknown\nCrate available: unknown",
+    DoesWrap = true,
+})
 end
 
 local GemStormBox = Tabs.Automation:AddRightGroupbox("Gem Storm", "gem")
@@ -4945,7 +5057,11 @@ Options.BuffComboMidasStartCount:OnChanged(function()
         Extra.BuffComboAwaitingMidasServerUpdate = false
         Extra.BuffComboAwaitingMidasPrevious = nil
         Extra.setBuffComboStatus("Combo count set to " .. tostring(Extra.BuffComboMidasCount) .. ".")
+        Extra.updateBuffComboInfo()
     end
+end)
+Options.BuffComboPotion:OnChanged(function()
+    Extra.updateBuffComboInfo()
 end)
 function Extra.bindPerformanceHudToggle(toggleId)
     local toggle = Toggles[toggleId]
@@ -5114,4 +5230,5 @@ if anyAutoUpgradeEnabled() then
     startAutoUpgradeLoop()
 end
 
+Extra.startBuffComboInfoLoop()
 notify("slimeinc loaded.")
