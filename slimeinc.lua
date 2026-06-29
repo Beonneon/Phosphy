@@ -68,10 +68,14 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.2",
+    Version = "1.3.3",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
+    BlessingActionTimeout = 0.45,
+    BlessingFailureRetrySeconds = 1,
+    BlessingOptionFields = { "key", "name", "id", "blessing" },
+    BlessingRemotes = {},
     CleanbotRollPending = false,
     CleanbotRollSerial = 0,
     SpawnIdQueue = {},
@@ -2181,10 +2185,6 @@ function Extra.blessingRuleSelected(optionId, definition)
     return option and multiSelectionContains(option.Value, definition.label) or false
 end
 
-function Extra.blessingIsWhitelisted(definition)
-    return Extra.blessingRuleSelected("BlessingSacrificeWhitelist", definition)
-end
-
 function Extra.blessingIsBlacklisted(definition)
     return Extra.blessingRuleSelected("BlessingSacrificeBlacklist", definition)
 end
@@ -2197,7 +2197,7 @@ function Extra.blessingOptionName(value)
         return nil
     end
 
-    for _, field in ipairs({ "key", "name", "id", "blessing" }) do
+    for _, field in ipairs(Extra.BlessingOptionFields) do
         local candidate = value[field]
         if typeof(candidate) == "string" and Extra.BlessingByKey[candidate] then
             return candidate
@@ -2248,7 +2248,7 @@ function Extra.findSacrificialBlessing(profile)
     local bestRank = math.huge
     for _, definition in ipairs(Extra.BlessingDefinitions) do
         local count = tonumber(progression[definition.progressionKey]) or 0
-        if count > 0 and Extra.blessingIsWhitelisted(definition) and not Extra.blessingIsBlacklisted(definition) then
+        if count > 0 and not Extra.blessingIsBlacklisted(definition) then
             local rank = Extra.BlessingRarityRank[definition.rarity] or 0
             if rank < bestRank then
                 best = definition
@@ -2257,6 +2257,17 @@ function Extra.findSacrificialBlessing(profile)
         end
     end
     return best
+end
+
+function Extra.getBlessingRemote(name)
+    local remote = Extra.BlessingRemotes[name]
+    if remote and remote.Parent then
+        return remote
+    end
+
+    remote = getRemote(name, 10)
+    Extra.BlessingRemotes[name] = remote
+    return remote
 end
 
 function Extra.markBlessingActionPending(timeoutSeconds)
@@ -2275,7 +2286,7 @@ function Extra.connectBlessingEvents()
         return true
     end
 
-    local remote = getRemote("BlessingResult", 10)
+    local remote = Extra.getBlessingRemote("BlessingResult")
     if not remote then
         notify("BlessingResult remote was not found.")
         return false
@@ -2296,8 +2307,8 @@ function Extra.connectBlessingEvents()
             Extra.BlessingPendingOptions = nil
             Extra.setBlessingStatus("Blessing choice accepted.")
         else
-            Extra.BlessingRetryAfter = now + 5
-            Extra.setBlessingStatus("Blessing request rejected or unavailable. Retrying in 5 seconds.")
+            Extra.BlessingRetryAfter = now + Extra.BlessingFailureRetrySeconds
+            Extra.setBlessingStatus("Blessing request rejected or unavailable. Retrying soon.")
         end
     end)
     return true
@@ -2313,8 +2324,8 @@ function Extra.autoBlessingStep(forceRoll)
         return false
     end
 
-    local activateRemote = getRemote("ActivateBlessing", 10)
-    local rerollRemote = getRemote("RerollBlessing", 10)
+    local activateRemote = Extra.getBlessingRemote("ActivateBlessing")
+    local rerollRemote = Extra.getBlessingRemote("RerollBlessing")
     if not activateRemote or not rerollRemote or not Extra.connectBlessingEvents() then
         Extra.setBlessingStatus("Blessing remotes were not found.")
         return false
@@ -2347,14 +2358,14 @@ function Extra.autoBlessingStep(forceRoll)
                 return false
             end
 
-            local pendingRerollRemote = getRemote("RerollPendingBlessings", 10)
+            local pendingRerollRemote = Extra.getBlessingRemote("RerollPendingBlessings")
             if not pendingRerollRemote then
                 Extra.setBlessingStatus("RerollPendingBlessings remote was not found.")
                 return false
             end
 
             Extra.BlessingPendingOptions = nil
-            Extra.markBlessingActionPending(1.5)
+            Extra.markBlessingActionPending(Extra.BlessingActionTimeout)
             pendingRerollRemote:FireServer()
             Marker:SetAttribute("BlessingLastPendingRerollAt", now)
             Extra.setBlessingStatus("Rerolling offered choices without sacrificing...")
@@ -2362,7 +2373,7 @@ function Extra.autoBlessingStep(forceRoll)
         end
 
         Extra.BlessingPendingOptions = nil
-        Extra.markBlessingActionPending(1.5)
+        Extra.markBlessingActionPending(Extra.BlessingActionTimeout)
         local controller = Extra.getBlessingController()
         local usedController = false
         if controller and typeof(controller.getPendingOptions) == "function" and typeof(controller.pick) == "function" then
@@ -2389,7 +2400,7 @@ function Extra.autoBlessingStep(forceRoll)
     local autoRoll = forceRoll == true or (Toggles.ToggleAutoBlessing and Toggles.ToggleAutoBlessing.Value)
     local autoSacrifice = Toggles.ToggleAutoBlessingSacrifice and Toggles.ToggleAutoBlessingSacrifice.Value
     if (autoRoll or autoSacrifice) and (tonumber(profile.blessingSlots) or 0) > 0 then
-        Extra.markBlessingActionPending(1.5)
+        Extra.markBlessingActionPending(Extra.BlessingActionTimeout)
         activateRemote:FireServer()
         Extra.setBlessingStatus("Rolling an available blessing slot...")
         return true
@@ -2403,19 +2414,21 @@ function Extra.autoBlessingStep(forceRoll)
     local gemEnergy = tonumber(profile.gemEnergy) or 0
     if gemEnergy < 10 then
         Extra.setBlessingStatus(string.format("Need 10 GE to sacrifice. Current GE: %s", tostring(gemEnergy)))
+        Extra.BlessingRetryAfter = now + Extra.BlessingFailureRetrySeconds
         return false
     end
 
     local sacrifice = Extra.findSacrificialBlessing(profile)
     if sacrifice then
-        Extra.markBlessingActionPending(1.5)
+        Extra.markBlessingActionPending(Extra.BlessingActionTimeout)
         rerollRemote:FireServer(sacrifice.key)
         Extra.setBlessingStatus("Sacrificing " .. sacrifice.label .. " for a new roll.")
         Marker:SetAttribute("BlessingLastSacrifice", sacrifice.key)
         return true
     end
 
-    Extra.setBlessingStatus("Waiting for a whitelisted owned blessing to sacrifice.")
+    Extra.setBlessingStatus("Waiting for a non-blacklisted owned blessing to sacrifice.")
+    Extra.BlessingRetryAfter = now + Extra.BlessingFailureRetrySeconds
     return false
 end
 
@@ -3105,9 +3118,6 @@ function Extra.printBuffComboDebug()
     ensureBoostState()
 
     local midasCount, midasSource = Extra.profileMidasCount()
-    local profile = getProfileData()
-    local lifetimeStats = profile and profile.lifetimeStats
-    local midasLifetime = typeof(lifetimeStats) == "table" and lifetimeStats.midasGoldBarsCollected or nil
     local crateReady, crateStatus, crateAlreadyBoosted, crateClaimable = Extra.getCrateReadiness()
     local totemReady, totemId = Extra.hasKnownTotem()
     local lines = {
@@ -3115,7 +3125,6 @@ function Extra.printBuffComboDebug()
         "version=" .. tostring(Extra.Version),
         "midasBoost=" .. tostring(isBoostActive("midasBob")),
         "midasProfileCount=" .. tostring(midasCount) .. " source=" .. tostring(midasSource),
-        "midasLifetimeStats=" .. tostring(midasLifetime) .. " (not used for combo count)",
         "midasFallbackCount=" .. tostring(Extra.BuffComboMidasCount),
         "heldGoldBar=" .. Extra.compactDebugValue(Extra.BuffComboHeldGoldBar, 0),
         "totemReady=" .. tostring(totemReady) .. " id=" .. tostring(totemId),
@@ -4832,25 +4841,12 @@ end
 
 do
 local BlessingRulesBox = Tabs.Blessings:AddLeftGroupbox("Sacrifice Rules", "list-checks")
-BlessingRulesBox:AddDropdown("BlessingSacrificeWhitelist", {
-    Text = "Sacrifice Whitelist",
-    Values = Extra.BlessingLabels,
-    Multi = true,
-    AllowNull = true,
-    Default = {},
-})
 BlessingRulesBox:AddDropdown("BlessingSacrificeBlacklist", {
     Text = "Protected Blacklist",
     Values = Extra.BlessingLabels,
     Multi = true,
     AllowNull = true,
     Default = {},
-})
-BlessingRulesBox:AddButton({
-    Text = "Clear Whitelist",
-    Func = function()
-        Options.BlessingSacrificeWhitelist:SetValue({})
-    end,
 })
 BlessingRulesBox:AddButton({
     Text = "Clear Blacklist",
