@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.0",
+    Version = "1.3.1",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -86,6 +86,7 @@ local Extra = {
     BuffComboIgnoredTotems = {},
     BuffComboAwaitingMidasServerUpdate = false,
     BuffComboAwaitingMidasPrevious = nil,
+    StardustReadyPrinted = false,
 }
 local ReadyActionLastFiredAt = {}
 local PotionRequestedUntil = {}
@@ -1413,21 +1414,38 @@ function Extra.getStardustCooldownRemaining()
 end
 
 local function isStardustMachineReady()
-    local remaining = Extra.getStardustCooldownRemaining()
-    if remaining == nil or remaining > 0 then
-        return false
-    end
-
     local label = getStardustCooldownLabel()
-    if label and not isReadyLabel(label) then
-        Marker:SetAttribute("StardustMachineSafeReady", "label-not-ready")
+    if not label then
+        Extra.StardustReadyPrinted = false
+        Marker:SetAttribute("StardustMachineSafeReady", "no-gui-label")
+        Marker:SetAttribute("StardustMachineGuiText", "")
         return false
     end
 
-    local gui = label and (label:FindFirstAncestorWhichIsA("BillboardGui") or label:FindFirstAncestorWhichIsA("SurfaceGui"))
+    local guiText = tostring(label.Text)
+    Marker:SetAttribute("StardustMachineGuiText", guiText)
+    if not guiText:upper():match("^%s*READY!?%s*$") then
+        Extra.StardustReadyPrinted = false
+        Marker:SetAttribute("StardustMachineSafeReady", "gui-cooldown")
+        return false
+    end
+
+    local gui = label:FindFirstAncestorWhichIsA("BillboardGui") or label:FindFirstAncestorWhichIsA("SurfaceGui")
     if gui and not gui.Enabled then
+        Extra.StardustReadyPrinted = false
         Marker:SetAttribute("StardustMachineSafeReady", "gui-disabled")
         return false
+    end
+
+    local remaining = Extra.getStardustCooldownRemaining()
+    if remaining == nil or remaining > 0 then
+        Extra.StardustReadyPrinted = false
+        return false
+    end
+
+    if not Extra.StardustReadyPrinted then
+        Extra.StardustReadyPrinted = true
+        print("[slimeinc] Stardust machine GUI is READY; auto fire allowed.")
     end
 
     return true
