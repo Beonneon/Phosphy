@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.2.3",
+    Version = "1.2.4",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -80,6 +80,9 @@ local Extra = {
     BuffComboHeldGoldBar = nil,
     BuffComboLastCrateClaimAt = 0,
     BuffComboRunning = false,
+    BuffComboFreshTotemId = nil,
+    BuffComboFreshTotemExpiresAt = 0,
+    BuffComboIgnoredTotems = {},
 }
 local ReadyActionLastFiredAt = {}
 local PotionRequestedUntil = {}
@@ -2400,8 +2403,12 @@ end
 local function connectTotemEvents()
     local spawned = getRemote("TotemSpawned", 10)
     if spawned and not Connections.TotemSpawned then
-        Connections.TotemSpawned = spawned.OnClientEvent:Connect(function(id)
-            if rememberTotemId(id) and Toggles.ToggleAutoTotemContact and Toggles.ToggleAutoTotemContact.Value then
+        Connections.TotemSpawned = spawned.OnClientEvent:Connect(function(id, position, duration)
+            local remembered = rememberTotemId(id)
+            if Extra.handleBuffComboTotemSpawn then
+                Extra.handleBuffComboTotemSpawn(id, position, duration)
+            end
+            if remembered and Toggles.ToggleAutoTotemContact and Toggles.ToggleAutoTotemContact.Value then
                 task.defer(claimTotemId, id, true)
             end
         end)
@@ -2411,7 +2418,12 @@ local function connectTotemEvents()
     if cleared and not Connections.TotemCleared then
         Connections.TotemCleared = cleared.OnClientEvent:Connect(function(id)
             if typeof(id) == "string" or typeof(id) == "number" then
-                TotemIds[tostring(id)] = nil
+                local key = tostring(id)
+                TotemIds[key] = nil
+                if Extra.BuffComboFreshTotemId == key then
+                    Extra.BuffComboFreshTotemId = nil
+                    Extra.BuffComboFreshTotemExpiresAt = 0
+                end
                 updateTotemMarker()
             end
         end)
@@ -2546,6 +2558,21 @@ function Extra.getCrateReadiness()
 end
 
 function Extra.hasKnownTotem()
+    if Toggles.ToggleBuffComboFreshTotem and Toggles.ToggleBuffComboFreshTotem.Value then
+        if Extra.BuffComboFreshTotemId then
+            local expiresAt = tonumber(Extra.BuffComboFreshTotemExpiresAt) or 0
+            if expiresAt > 0 and Workspace:GetServerTimeNow() >= expiresAt then
+                Extra.BuffComboFreshTotemId = nil
+                Extra.BuffComboFreshTotemExpiresAt = 0
+                Marker:SetAttribute("BuffComboFreshTotemId", "")
+                Marker:SetAttribute("BuffComboFreshTotemExpiresAt", 0)
+                return false, nil
+            end
+            return true, Extra.BuffComboFreshTotemId
+        end
+        return false, nil
+    end
+
     if isBoostActive("totem") == true then
         return true, "active"
     end
@@ -2554,6 +2581,85 @@ function Extra.hasKnownTotem()
         return true, id
     end
     return false, nil
+end
+
+function Extra.handleBuffComboTotemSpawn(id, position, duration)
+    if not Extra.buffComboEnabled() then
+        return
+    end
+
+    if typeof(id) ~= "string" and typeof(id) ~= "number" then
+        return
+    end
+
+    id = tostring(id)
+    if Extra.BuffComboIgnoredTotems and Extra.BuffComboIgnoredTotems[id] then
+        return
+    end
+
+    local durationSeconds = tonumber(duration)
+    local expiresAt = 0
+    if durationSeconds then
+        expiresAt = Workspace:GetServerTimeNow() + math.max(0, durationSeconds)
+    end
+
+    Extra.BuffComboFreshTotemId = id
+    Extra.BuffComboFreshTotemExpiresAt = expiresAt
+    Marker:SetAttribute("BuffComboFreshTotemId", id)
+    Marker:SetAttribute("BuffComboFreshTotemExpiresAt", expiresAt)
+    if durationSeconds then
+        Extra.setBuffComboStatus("Fresh totem ready: " .. id .. " for "
+            .. tostring(math.ceil(math.max(0, durationSeconds))) .. "s.")
+    else
+        Extra.setBuffComboStatus("Fresh totem ready: " .. id .. ".")
+    end
+end
+
+function Extra.profileMidasCount()
+    local profile = getProfileData()
+    if typeof(profile) ~= "table" then
+        return nil
+    end
+
+    local candidates = {
+        "midasBobBars",
+        "midasBobGoldBars",
+        "midasGoldBars",
+        "goldBars",
+        "midasBars",
+    }
+
+    for _, key in ipairs(candidates) do
+        local value = tonumber(profile[key])
+        if value and value >= 0 and value <= 10 then
+            return math.floor(value), key
+        end
+    end
+
+    local followerState = profile.followerState or profile.followers or profile.midasBob
+    if typeof(followerState) == "table" then
+        for _, key in ipairs(candidates) do
+            local value = tonumber(followerState[key])
+            if value and value >= 0 and value <= 10 then
+                return math.floor(value), "nested." .. key
+            end
+        end
+    end
+
+    return nil
+end
+
+function Extra.syncBuffComboMidasCount()
+    if Toggles.ToggleBuffComboAutoTrackMidas and Toggles.ToggleBuffComboAutoTrackMidas.Value then
+        local profileCount, source = Extra.profileMidasCount()
+        if profileCount and profileCount > Extra.BuffComboMidasCount then
+            Extra.BuffComboMidasCount = math.min(10, profileCount)
+            Marker:SetAttribute("BuffComboMidasCountSource", source)
+            return true
+        end
+    end
+
+    return false
 end
 
 function Extra.purchaseComboPotionIfNeeded(potion)
@@ -2646,6 +2752,8 @@ function Extra.handleBuffComboGoldBar(id, position)
 end
 
 function Extra.finishBuffCombo()
+    Extra.syncBuffComboMidasCount()
+
     local held = Extra.BuffComboHeldGoldBar
     if not held then
         Extra.setBuffComboStatus("Waiting for the final Midas bar to spawn.")
@@ -2661,10 +2769,15 @@ function Extra.finishBuffCombo()
     if Toggles.ToggleBuffComboRequireTotem and Toggles.ToggleBuffComboRequireTotem.Value then
         local hasTotem, totemId = Extra.hasKnownTotem()
         if not hasTotem then
-            Extra.setBuffComboStatus("Waiting for a totem spawn id.")
+            Extra.setBuffComboStatus(
+                Toggles.ToggleBuffComboFreshTotem and Toggles.ToggleBuffComboFreshTotem.Value
+                    and "Waiting for a fresh totem spawn."
+                    or "Waiting for a totem spawn id."
+            )
             return false
         end
         Extra.BuffComboTotemAlreadyActive = totemId == "active"
+        Extra.BuffComboReadyTotemId = totemId
     end
 
     Extra.setBuffComboStatus("Claiming crate boost...")
@@ -2678,7 +2791,12 @@ function Extra.finishBuffCombo()
 
     if Toggles.ToggleBuffComboRequireTotem and Toggles.ToggleBuffComboRequireTotem.Value
         and not Extra.BuffComboTotemAlreadyActive then
-        local claimed = claimKnownTotems()
+        local claimed = 0
+        if Extra.BuffComboReadyTotemId and Extra.BuffComboReadyTotemId ~= "active" then
+            claimed = claimTotemId(Extra.BuffComboReadyTotemId, true) and 1 or 0
+        else
+            claimed = claimKnownTotems()
+        end
         Marker:SetAttribute("BuffComboTotemsClaimed", claimed)
         if claimed < 1 then
             Extra.setBuffComboStatus("Totem disappeared before claim.")
@@ -2714,14 +2832,23 @@ function Extra.startBuffCombo()
     connectTotemEvents()
 
     Extra.BuffComboMidasCount = math.clamp(math.floor(getNumberOption("BuffComboMidasStartCount", 0)), 0, 9)
+    Extra.syncBuffComboMidasCount()
     Extra.BuffComboHeldGoldBar = nil
     Extra.BuffComboTotemAlreadyActive = false
+    Extra.BuffComboReadyTotemId = nil
+    Extra.BuffComboFreshTotemId = nil
+    Extra.BuffComboFreshTotemExpiresAt = 0
+    Extra.BuffComboIgnoredTotems = {}
+    for id in pairs(TotemIds) do
+        Extra.BuffComboIgnoredTotems[tostring(id)] = true
+    end
     Extra.BuffComboRunning = true
     Extra.setBuffComboStatus("Buff combo armed. Midas count " .. tostring(Extra.BuffComboMidasCount) .. "/"
         .. tostring(Extra.getBuffComboHoldCount()) .. ".")
 
     Tasks.BuffCombo = task.spawn(function()
         while Extra.buffComboEnabled() do
+            Extra.syncBuffComboMidasCount()
             if Extra.BuffComboMidasCount >= Extra.getBuffComboHoldCount() then
                 Extra.finishBuffCombo()
             else
@@ -4477,7 +4604,7 @@ BuffComboBox:AddDropdown("BuffComboPotion", {
     Default = "Godly Potion",
 })
 BuffComboBox:AddSlider("BuffComboMidasStartCount", {
-    Text = "Current Midas Count",
+    Text = "Fallback Midas Count",
     Min = 0,
     Max = 9,
     Default = 0,
@@ -4494,8 +4621,16 @@ BuffComboBox:AddCheckbox("ToggleBuffComboBuyPotion", {
     Text = "Buy Potion If Missing",
     Default = true,
 })
+BuffComboBox:AddCheckbox("ToggleBuffComboAutoTrackMidas", {
+    Text = "Auto Track Midas",
+    Default = true,
+})
 BuffComboBox:AddCheckbox("ToggleBuffComboRequireTotem", {
     Text = "Require Totem",
+    Default = true,
+})
+BuffComboBox:AddCheckbox("ToggleBuffComboFreshTotem", {
+    Text = "Require Fresh Totem",
     Default = true,
 })
 BuffComboBox:AddCheckbox("ToggleBuffCombo", {
