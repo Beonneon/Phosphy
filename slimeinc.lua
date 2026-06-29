@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.2.9",
+    Version = "1.3.0",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -77,7 +77,7 @@ local Extra = {
     SpawnIdQueue = {},
     SpawnIdQueued = {},
     BuffComboMidasCount = 0,
-    BuffComboMidasCountSource = "fallback",
+    BuffComboMidasCountSource = "fallback/manual",
     BuffComboHeldGoldBar = nil,
     BuffComboLastCrateClaimAt = 0,
     BuffComboRunning = false,
@@ -1378,14 +1378,59 @@ local function getStardustCooldownLabel()
     return cooldown and cooldown:IsA("TextLabel") and cooldown or nil
 end
 
+function Extra.getStardustCooldownRemaining()
+    local profile = getProfileData()
+    if typeof(profile) ~= "table" then
+        Marker:SetAttribute("StardustMachineSafeReady", "no-profile")
+        return nil
+    end
+
+    if profile.stardustMachineFixed ~= true then
+        Marker:SetAttribute("StardustMachineSafeReady", "not-fixed")
+        return nil
+    end
+
+    local upgrades = profile.upgrades
+    local cooldownUpgrade = 0
+    if typeof(upgrades) == "table" then
+        cooldownUpgrade = tonumber(upgrades.stardustMachineCooldown) or 0
+    end
+
+    local lastUsed = tonumber(profile.stardustMachineLastUsed)
+    if not lastUsed then
+        Marker:SetAttribute("StardustMachineSafeReady", "no-last-used")
+        return nil
+    end
+
+    local cooldown = math.max(
+        0,
+        28800 - cooldownUpgrade * 3600
+    )
+    local remaining = math.max(0, lastUsed + cooldown - os.time())
+    Marker:SetAttribute("StardustMachineCooldownRemaining", remaining)
+    Marker:SetAttribute("StardustMachineSafeReady", remaining <= 0 and "ready" or "cooldown")
+    return remaining
+end
+
 local function isStardustMachineReady()
-    local label = getStardustCooldownLabel()
-    if not isReadyLabel(label) then
+    local remaining = Extra.getStardustCooldownRemaining()
+    if remaining == nil or remaining > 0 then
         return false
     end
 
-    local gui = label:FindFirstAncestorWhichIsA("BillboardGui") or label:FindFirstAncestorWhichIsA("SurfaceGui")
-    return not gui or gui.Enabled
+    local label = getStardustCooldownLabel()
+    if label and not isReadyLabel(label) then
+        Marker:SetAttribute("StardustMachineSafeReady", "label-not-ready")
+        return false
+    end
+
+    local gui = label and (label:FindFirstAncestorWhichIsA("BillboardGui") or label:FindFirstAncestorWhichIsA("SurfaceGui"))
+    if gui and not gui.Enabled then
+        Marker:SetAttribute("StardustMachineSafeReady", "gui-disabled")
+        return false
+    end
+
+    return true
 end
 
 local function requestFallingStarBoost()
@@ -2711,15 +2756,6 @@ function Extra.profileMidasCount()
         return nil
     end
 
-    local lifetimeStats = profile.lifetimeStats
-    if typeof(lifetimeStats) == "table" then
-        local collected = tonumber(lifetimeStats.midasGoldBarsCollected)
-        if collected and collected >= 0 then
-            local count = collected % 10
-            return math.floor(count), "lifetimeStats.midasGoldBarsCollected%10"
-        end
-    end
-
     local candidates = {
         "midasBobBars",
         "midasBobGoldBars",
@@ -2991,7 +3027,7 @@ function Extra.printBuffComboDebug()
         "version=" .. tostring(Extra.Version),
         "midasBoost=" .. tostring(isBoostActive("midasBob")),
         "midasProfileCount=" .. tostring(midasCount) .. " source=" .. tostring(midasSource),
-        "midasLifetimeStats=" .. tostring(midasLifetime),
+        "midasLifetimeStats=" .. tostring(midasLifetime) .. " (not used for combo count)",
         "midasFallbackCount=" .. tostring(Extra.BuffComboMidasCount),
         "heldGoldBar=" .. Extra.compactDebugValue(Extra.BuffComboHeldGoldBar, 0),
         "totemReady=" .. tostring(totemReady) .. " id=" .. tostring(totemId),
@@ -3156,8 +3192,19 @@ function Extra.handleBuffComboGoldBar(id, position)
 
     if Extra.BuffComboMidasCount < holdCount then
         if not hasServerCount then
-            Extra.setBuffComboStatus("No server Midas count found. Set fallback to "
-                .. tostring(holdCount) .. " when the next bar should be held.")
+            task.spawn(function()
+                local previousCount = Extra.BuffComboMidasCount
+                if collectMidasGoldBar(id, position) then
+                    Extra.BuffComboMidasCount = math.clamp(previousCount + 1, 0, 10)
+                    Extra.BuffComboMidasCountSource = "observed:fallback"
+                    Extra.BuffComboAwaitingMidasServerUpdate = false
+                    Extra.BuffComboAwaitingMidasPrevious = nil
+                    Marker:SetAttribute("BuffComboMidasCount", Extra.BuffComboMidasCount)
+                    Marker:SetAttribute("BuffComboMidasCountSource", Extra.BuffComboMidasCountSource)
+                    Extra.setBuffComboStatus("Collected Midas bar. Local combo count: "
+                        .. tostring(Extra.BuffComboMidasCount) .. "/" .. tostring(holdCount) .. ".")
+                end
+            end)
             return true
         end
 
@@ -3258,6 +3305,7 @@ function Extra.finishBuffCombo()
     if collectMidasGoldBar(held.id, held.position) then
         Extra.BuffComboHeldGoldBar = nil
         Extra.BuffComboMidasCount = Extra.getBuffComboHoldCount() + 1
+        Extra.BuffComboMidasCountSource = "observed:combo-fired"
         Extra.setBuffComboStatus("Combo fired: crate + totem + potion + Midas.")
         task.defer(function()
             if Toggles.ToggleBuffCombo then
@@ -3277,11 +3325,11 @@ function Extra.startBuffCombo()
     connectTotemEvents()
 
     Extra.BuffComboMidasCount = math.clamp(math.floor(getNumberOption("BuffComboMidasStartCount", 0)), 0, 9)
+    Extra.BuffComboMidasCountSource = "fallback/manual"
     Extra.syncBuffComboMidasCount()
     Extra.BuffComboHeldGoldBar = nil
     Extra.BuffComboTotemAlreadyActive = false
     Extra.BuffComboReadyTotemId = nil
-    Extra.BuffComboMidasCountSource = "fallback"
     Extra.BuffComboAwaitingMidasServerUpdate = false
     Extra.BuffComboAwaitingMidasPrevious = nil
     Extra.BuffComboFreshTotemId = nil
@@ -5096,7 +5144,7 @@ BuffComboBox:AddButton({
     Text = "Reset Combo Count",
     Func = function()
         Extra.BuffComboMidasCount = math.clamp(math.floor(getNumberOption("BuffComboMidasStartCount", 0)), 0, 9)
-        Extra.BuffComboMidasCountSource = "fallback"
+        Extra.BuffComboMidasCountSource = "fallback/manual"
         Extra.BuffComboAwaitingMidasServerUpdate = false
         Extra.BuffComboAwaitingMidasPrevious = nil
         Extra.BuffComboHeldGoldBar = nil
@@ -5378,9 +5426,10 @@ Options.PlayerSpeed:OnChanged(function()
 end)
 Options.BuffComboMidasStartCount:OnChanged(function()
     if not (Toggles.ToggleBuffCombo and Toggles.ToggleBuffCombo.Value)
-        or Extra.BuffComboMidasCountSource == "fallback" then
+        or Extra.BuffComboMidasCountSource == "fallback"
+        or Extra.BuffComboMidasCountSource == "fallback/manual" then
         Extra.BuffComboMidasCount = math.clamp(math.floor(getNumberOption("BuffComboMidasStartCount", 0)), 0, 9)
-        Extra.BuffComboMidasCountSource = "fallback"
+        Extra.BuffComboMidasCountSource = "fallback/manual"
         Extra.BuffComboAwaitingMidasServerUpdate = false
         Extra.BuffComboAwaitingMidasPrevious = nil
         Extra.setBuffComboStatus("Combo count set to " .. tostring(Extra.BuffComboMidasCount) .. ".")
