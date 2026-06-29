@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.2.1",
+    Version = "1.2.2",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -3355,6 +3355,47 @@ function Extra.sweepPerfSlimes()
     return Extra.hidePerfTree(Extra.findPath(Workspace, { "Runtime", "Slimes" }))
 end
 
+function Extra.perfSlimesFolder()
+    return Extra.findPath(Workspace, { "Runtime", "Slimes" })
+end
+
+function Extra.startPerfSlimeWatcher()
+    disconnect("PerfSlimeChildAdded")
+    disconnect("PerfSlimeDescendantAdded")
+
+    if not Extra.perfToggle("TogglePerfHideSlimes", true)
+        or not Extra.perfToggle("TogglePerfAutoHideNewSlimes", true) then
+        Marker:SetAttribute("PerfSlimeWatcher", false)
+        return false
+    end
+
+    local slimes = Extra.perfSlimesFolder()
+    if not slimes then
+        Marker:SetAttribute("PerfSlimeWatcher", false)
+        return false
+    end
+
+    Connections.PerfSlimeChildAdded = slimes.ChildAdded:Connect(function(slime)
+        task.defer(function()
+            Extra.hidePerfTree(slime)
+        end)
+    end)
+    Connections.PerfSlimeDescendantAdded = slimes.DescendantAdded:Connect(function(descendant)
+        task.defer(function()
+            Extra.hidePerfWorldObject(descendant)
+        end)
+    end)
+
+    Marker:SetAttribute("PerfSlimeWatcher", true)
+    return true
+end
+
+function Extra.stopPerfSlimeWatcher()
+    disconnect("PerfSlimeChildAdded")
+    disconnect("PerfSlimeDescendantAdded")
+    Marker:SetAttribute("PerfSlimeWatcher", false)
+end
+
 function Extra.sweepPerfCleanbots()
     local count = Extra.hidePerfTree(Extra.findPath(Workspace, { "Runtime", "Roombas" }))
     local zones = Extra.findPath(Workspace, { "World", "Zones" })
@@ -3421,17 +3462,18 @@ end
 function Extra.sweepPerfHud()
     local count = 0
     local gui = Extra.perfMainGui()
+    local hideHud = Extra.perfToggle("TogglePerfHideHud", false)
     if gui then
-        count += Extra.setPerfGuiRoot(gui:FindFirstChild("Stats"), Extra.perfToggle("TogglePerfHideStats", true))
-        count += Extra.setPerfGuiRoot(gui:FindFirstChild("Boosts"), Extra.perfToggle("TogglePerfHideBoosts", true))
-        count += Extra.setPerfGuiRoot(gui:FindFirstChild("Lvl"), Extra.perfToggle("TogglePerfHideTopHud", true))
-        count += Extra.setPerfGuiRoot(gui:FindFirstChild("Capacity"), Extra.perfToggle("TogglePerfHideTopHud", true))
-        count += Extra.setPerfGuiRoot(gui:FindFirstChild("Abilities"), Extra.perfToggle("TogglePerfHideButtons", true))
-        count += Extra.setPerfGuiRoot(gui:FindFirstChild("Options"), Extra.perfToggle("TogglePerfHideButtons", true))
-        count += Extra.setPerfGuiRoot(gui:FindFirstChild("DailyQuestHud"), Extra.perfToggle("TogglePerfHideInfo", true))
+        count += Extra.setPerfGuiRoot(gui:FindFirstChild("Stats"), hideHud and Extra.perfToggle("TogglePerfHideStats", true))
+        count += Extra.setPerfGuiRoot(gui:FindFirstChild("Boosts"), hideHud and Extra.perfToggle("TogglePerfHideBoosts", true))
+        count += Extra.setPerfGuiRoot(gui:FindFirstChild("Lvl"), hideHud and Extra.perfToggle("TogglePerfHideTopHud", true))
+        count += Extra.setPerfGuiRoot(gui:FindFirstChild("Capacity"), hideHud and Extra.perfToggle("TogglePerfHideTopHud", true))
+        count += Extra.setPerfGuiRoot(gui:FindFirstChild("Abilities"), hideHud and Extra.perfToggle("TogglePerfHideButtons", true))
+        count += Extra.setPerfGuiRoot(gui:FindFirstChild("Options"), hideHud and Extra.perfToggle("TogglePerfHideButtons", true))
+        count += Extra.setPerfGuiRoot(gui:FindFirstChild("DailyQuestHud"), hideHud and Extra.perfToggle("TogglePerfHideInfo", true))
     end
 
-    count += Extra.setPerfGuiRoot(Extra.perfPlayerGui() and Extra.perfPlayerGui():FindFirstChild("InfoInterface"), Extra.perfToggle("TogglePerfHideInfo", true))
+    count += Extra.setPerfGuiRoot(Extra.perfPlayerGui() and Extra.perfPlayerGui():FindFirstChild("InfoInterface"), hideHud and Extra.perfToggle("TogglePerfHideInfo", true))
     return count
 end
 
@@ -3488,6 +3530,13 @@ function Extra.sweepPerformance()
     end
     if Extra.perfToggle("TogglePerfHideSlimes", true) then
         count += Extra.sweepPerfSlimes()
+        if Extra.perfToggle("TogglePerfAutoHideNewSlimes", true) then
+            Extra.startPerfSlimeWatcher()
+        else
+            Extra.stopPerfSlimeWatcher()
+        end
+    else
+        Extra.stopPerfSlimeWatcher()
     end
     if Extra.perfToggle("TogglePerfHideCleanbots", true) then
         count += Extra.sweepPerfCleanbots()
@@ -3609,6 +3658,10 @@ do
         Text = "Hide Slimes",
         Default = true,
     })
+    PerfWorldBox:AddCheckbox("TogglePerfAutoHideNewSlimes", {
+        Text = "Keep New Slimes Hidden",
+        Default = true,
+    })
     PerfWorldBox:AddCheckbox("TogglePerfHideCleanbots", {
         Text = "Hide Cleanbots",
         Default = true,
@@ -3633,6 +3686,10 @@ end
 
 do
     local PerfHudBox = Tabs.Performance:AddLeftGroupbox("HUD", "sliders-horizontal")
+    PerfHudBox:AddCheckbox("TogglePerfHideHud", {
+        Text = "Hide HUD",
+        Default = false,
+    })
     PerfHudBox:AddCheckbox("TogglePerfHideStats", {
         Text = "Hide Currency HUD",
         Default = true,
@@ -4327,12 +4384,31 @@ Extra.bindPerformanceHudToggle("TogglePerfHideTopHud")
 Extra.bindPerformanceHudToggle("TogglePerfHideButtons")
 Extra.bindPerformanceHudToggle("TogglePerfHideInfo")
 Extra.bindPerformanceHudToggle("TogglePerfHidePopups")
+Extra.bindPerformanceHudToggle("TogglePerfHideHud")
+
+Toggles.TogglePerfHideSlimes:OnChanged(function(state)
+    if state and Toggles.TogglePerfAutoHideNewSlimes and Toggles.TogglePerfAutoHideNewSlimes.Value then
+        Extra.sweepPerfSlimes()
+        Extra.startPerfSlimeWatcher()
+    else
+        Extra.stopPerfSlimeWatcher()
+    end
+end)
+Toggles.TogglePerfAutoHideNewSlimes:OnChanged(function(state)
+    if state and Toggles.TogglePerfHideSlimes and Toggles.TogglePerfHideSlimes.Value then
+        Extra.sweepPerfSlimes()
+        Extra.startPerfSlimeWatcher()
+    else
+        Extra.stopPerfSlimeWatcher()
+    end
+end)
 
 Library:OnUnload(function()
     Marker:SetAttribute("Session", "unloaded-" .. tostring(os.clock()))
     Marker:SetAttribute("Enabled", false)
     stopPlayerSpeed()
     Extra.stopPerformance()
+    Extra.stopPerfSlimeWatcher()
 
     for name in pairs(Tasks) do
         stopTask(name)
