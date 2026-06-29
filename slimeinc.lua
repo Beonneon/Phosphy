@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.2.0",
+    Version = "1.2.1",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -3482,10 +3482,6 @@ function Extra.sweepPerfPopups()
 end
 
 function Extra.sweepPerformance()
-    if not Extra.perfToggle("TogglePerfMaster", false) then
-        return 0
-    end
-
     local count = 0
     if Extra.perfToggle("TogglePerfVfx", true) then
         count += Extra.sweepPerfVfx()
@@ -3515,7 +3511,8 @@ function Extra.sweepPerformance()
 
     Marker:SetAttribute("PerformanceLastTouched", count)
     Marker:SetAttribute("PerformanceLastSweepAt", Workspace:GetServerTimeNow())
-    Extra.setPerfStatus("Last sweep touched " .. tostring(count) .. " item(s).")
+    Marker:SetAttribute("PerformanceEnabled", false)
+    Extra.setPerfStatus("One-time FPS boost touched " .. tostring(count) .. " item(s).")
     return count
 end
 
@@ -3533,29 +3530,7 @@ function Extra.stopPerformance()
     stopTask("Performance")
     Marker:SetAttribute("PerformanceEnabled", false)
     Extra.showPerformanceHud()
-    Extra.setPerfStatus("Performance mode is off.")
-end
-
-function Extra.startPerformance()
-    stopTask("Performance")
-    Marker:SetAttribute("PerformanceEnabled", true)
-    Extra.sweepPerformance()
-    Tasks.Performance = task.spawn(function()
-        while Extra.perfToggle("TogglePerfMaster", false) do
-            Extra.sweepPerformance()
-            task.wait(math.max(0.25, Extra.perfOption("PerfSweepInterval", 1)))
-        end
-        Extra.showPerformanceHud()
-        Marker:SetAttribute("PerformanceEnabled", false)
-    end)
-end
-
-function Extra.refreshPerformance()
-    if Extra.perfToggle("TogglePerfMaster", false) then
-        Extra.startPerformance()
-    else
-        Extra.stopPerformance()
-    end
+    Extra.setPerfStatus("HUD restored. World FPS hides restore on rejoin.")
 end
 
 local Window = Library:CreateWindow({
@@ -3595,10 +3570,6 @@ end
 
 do
     local PerfCoreBox = Tabs.Performance:AddLeftGroupbox("Core", "gauge")
-    PerfCoreBox:AddCheckbox("TogglePerfMaster", {
-        Text = "Enable FPS Boost",
-        Default = false,
-    })
     PerfCoreBox:AddCheckbox("TogglePerfVfx", {
         Text = "Disable VFX",
         Default = true,
@@ -3611,19 +3582,11 @@ do
         Text = "Low Render Quality",
         Default = true,
     })
-    PerfCoreBox:AddSlider("PerfSweepInterval", {
-        Text = "Sweep Interval",
-        Min = 0.25,
-        Max = 5,
-        Default = 1,
-        Rounding = 2,
-        Suffix = " s",
-    })
     PerfCoreBox:AddButton({
-        Text = "Apply Once",
+        Text = "Apply FPS Boost Once",
         Func = function()
             task.spawn(function()
-                notify("Performance sweep touched: " .. tostring(Extra.sweepPerformance()))
+                notify("FPS boost touched: " .. tostring(Extra.sweepPerformance()))
             end)
         end,
     })
@@ -3635,7 +3598,7 @@ do
         end,
     })
     Extra.PerformanceStatusLabel = PerfCoreBox:AddLabel({
-        Text = "Performance mode is off.",
+        Text = "FPS boost is one-time. HUD toggles update live.",
         DoesWrap = true,
     })
 end
@@ -4347,47 +4310,23 @@ Options.PlayerSpeed:OnChanged(function()
         applyPlayerSpeed()
     end
 end)
-Options.PerfSweepInterval:OnChanged(function()
-    if Toggles.TogglePerfMaster and Toggles.TogglePerfMaster.Value then
-        Extra.sweepPerformance()
-    end
-end)
-
-Toggles.TogglePerfMaster:OnChanged(function(state)
-    if state then
-        Extra.startPerformance()
-    else
-        Extra.stopPerformance()
-    end
-end)
-
-function Extra.bindPerformanceToggle(toggleId)
+function Extra.bindPerformanceHudToggle(toggleId)
     local toggle = Toggles[toggleId]
     if toggle then
         toggle:OnChanged(function()
-            if Toggles.TogglePerfMaster and Toggles.TogglePerfMaster.Value then
-                Extra.sweepPerformance()
-            else
-                Extra.showPerformanceHud()
+            Extra.sweepPerfHud()
+            if toggleId == "TogglePerfHidePopups" and toggle.Value then
+                Extra.sweepPerfPopups()
             end
         end)
     end
 end
-Extra.bindPerformanceToggle("TogglePerfVfx")
-Extra.bindPerformanceToggle("TogglePerfNoShadows")
-Extra.bindPerformanceToggle("TogglePerfLowQuality")
-Extra.bindPerformanceToggle("TogglePerfHideSlimes")
-Extra.bindPerformanceToggle("TogglePerfHideCleanbots")
-Extra.bindPerformanceToggle("TogglePerfHideBobs")
-Extra.bindPerformanceToggle("TogglePerfHideGemBob")
-Extra.bindPerformanceToggle("TogglePerfHideBoards")
-Extra.bindPerformanceToggle("TogglePerfHideTopki")
-Extra.bindPerformanceToggle("TogglePerfHideStats")
-Extra.bindPerformanceToggle("TogglePerfHideBoosts")
-Extra.bindPerformanceToggle("TogglePerfHideTopHud")
-Extra.bindPerformanceToggle("TogglePerfHideButtons")
-Extra.bindPerformanceToggle("TogglePerfHideInfo")
-Extra.bindPerformanceToggle("TogglePerfHidePopups")
+Extra.bindPerformanceHudToggle("TogglePerfHideStats")
+Extra.bindPerformanceHudToggle("TogglePerfHideBoosts")
+Extra.bindPerformanceHudToggle("TogglePerfHideTopHud")
+Extra.bindPerformanceHudToggle("TogglePerfHideButtons")
+Extra.bindPerformanceHudToggle("TogglePerfHideInfo")
+Extra.bindPerformanceHudToggle("TogglePerfHidePopups")
 
 Library:OnUnload(function()
     Marker:SetAttribute("Session", "unloaded-" .. tostring(os.clock()))
@@ -4511,9 +4450,6 @@ if Toggles.ToggleAutoCleanbotRoll.Value then
 end
 if Toggles.TogglePlayerSpeed.Value then
     startPlayerSpeed()
-end
-if Toggles.TogglePerfMaster.Value then
-    Extra.startPerformance()
 end
 if anyAutoUpgradeEnabled() then
     startAutoUpgradeLoop()
