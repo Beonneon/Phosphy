@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.2.8",
+    Version = "1.2.9",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -2581,13 +2581,15 @@ function Extra.clearLocalCrateVisuals()
 end
 
 function Extra.getCrateReadiness()
-    if Extra.getCrateBoostActive and Extra.getCrateBoostActive() == true then
-        return true, "Crate boost already active.", true
-    end
+    local boostActive = Extra.getCrateBoostActive and Extra.getCrateBoostActive() == true
 
     local sinceClaim = os.clock() - (Extra.BuffComboLastCrateClaimAt or 0)
     if Extra.BuffComboLastCrateClaimAt > 0 and sinceClaim < 1000 then
-        return false, "Crate remote cooldown: " .. tostring(math.ceil(1000 - sinceClaim)) .. "s"
+        local message = "Crate remote cooldown: " .. tostring(math.ceil(1000 - sinceClaim)) .. "s"
+        if boostActive then
+            return true, "Crate boost active; " .. message, true, false
+        end
+        return false, message, false, false
     end
 
     local controller = Extra.getCrateController()
@@ -2596,27 +2598,36 @@ function Extra.getCrateReadiness()
         if ok and typeof(nextSpawn) == "number" then
             local remaining = math.max(0, math.ceil(nextSpawn - Workspace:GetServerTimeNow()))
             if remaining <= 0 then
-                return true, "Crate timer elapsed; remote check allowed.", false
+                return true, "Crate timer elapsed; remote check allowed.", boostActive, true
             end
-            return false, "Waiting for crate timer: " .. tostring(remaining) .. "s"
+
+            local status = "Waiting for crate timer: " .. tostring(remaining) .. "s"
+            if boostActive then
+                return true, "Crate boost active; " .. status, true, false
+            end
+            return false, status, false, false
         end
     end
 
     if Toggles.ToggleBuffComboTrustClientCrate and Toggles.ToggleBuffComboTrustClientCrate.Value then
         local prompt = Extra.findClaimableCratePrompt()
         if prompt then
-            return true, "Client crate prompt trusted.", false
+            return true, "Client crate prompt trusted.", boostActive, true
         end
 
         if controller and typeof(controller.isCrateActive) == "function" then
             local ok, active = pcall(controller.isCrateActive)
             if ok and active == true then
-                return true, "Client crate controller trusted.", false
+                return true, "Client crate controller trusted.", boostActive, true
             end
         end
     end
 
-    return false, "Waiting for crate boost or server timer. Client crate visual ignored."
+    if boostActive then
+        return true, "Crate boost already active; client crate visual ignored.", true, false
+    end
+
+    return false, "Waiting for crate boost or server timer. Client crate visual ignored.", false, false
 end
 
 function Extra.getTotemBoostActive()
@@ -2698,6 +2709,15 @@ function Extra.profileMidasCount()
     local profile = getProfileData()
     if typeof(profile) ~= "table" then
         return nil
+    end
+
+    local lifetimeStats = profile.lifetimeStats
+    if typeof(lifetimeStats) == "table" then
+        local collected = tonumber(lifetimeStats.midasGoldBarsCollected)
+        if collected and collected >= 0 then
+            local count = collected % 10
+            return math.floor(count), "lifetimeStats.midasGoldBarsCollected%10"
+        end
     end
 
     local candidates = {
@@ -2961,18 +2981,23 @@ function Extra.printBuffComboDebug()
     ensureBoostState()
 
     local midasCount, midasSource = Extra.profileMidasCount()
-    local crateReady, crateStatus, crateAlreadyBoosted = Extra.getCrateReadiness()
+    local profile = getProfileData()
+    local lifetimeStats = profile and profile.lifetimeStats
+    local midasLifetime = typeof(lifetimeStats) == "table" and lifetimeStats.midasGoldBarsCollected or nil
+    local crateReady, crateStatus, crateAlreadyBoosted, crateClaimable = Extra.getCrateReadiness()
     local totemReady, totemId = Extra.hasKnownTotem()
     local lines = {
         "[slimeinc debug] Buff combo state",
         "version=" .. tostring(Extra.Version),
         "midasBoost=" .. tostring(isBoostActive("midasBob")),
         "midasProfileCount=" .. tostring(midasCount) .. " source=" .. tostring(midasSource),
+        "midasLifetimeStats=" .. tostring(midasLifetime),
         "midasFallbackCount=" .. tostring(Extra.BuffComboMidasCount),
         "heldGoldBar=" .. Extra.compactDebugValue(Extra.BuffComboHeldGoldBar, 0),
         "totemReady=" .. tostring(totemReady) .. " id=" .. tostring(totemId),
         "totemBoost=" .. tostring(Extra.getTotemBoostActive()),
-        "crateReady=" .. tostring(crateReady) .. " alreadyBoosted=" .. tostring(crateAlreadyBoosted),
+        "crateReady=" .. tostring(crateReady) .. " alreadyBoosted=" .. tostring(crateAlreadyBoosted)
+            .. " claimable=" .. tostring(crateClaimable),
         "crateStatus=" .. tostring(crateStatus),
         "crateBoost=" .. tostring(Extra.getCrateBoostActive()),
         "boosts=" .. Extra.compactDebugValue(ActiveBoosts, 0),
@@ -3013,7 +3038,7 @@ function Extra.updateBuffComboInfo()
             .. (totemId and totemId ~= "active" and (" [" .. tostring(totemId) .. "]") or ""),
         "Totem boost: " .. Extra.boostActiveText("totem", true),
         "Crate boost: " .. Extra.boostActiveText({ "goldenCrateDrop", "crateDrop" }),
-        "Crate available: " .. Extra.boolStatus(crateReady and not crateAlreadyBoosted),
+        "Crate available: " .. Extra.boolStatus(crateClaimable),
         "Crate status: " .. tostring(crateStatus),
         "Potions: " .. table.concat(potionParts, ", "),
     }
@@ -3173,7 +3198,7 @@ function Extra.finishBuffCombo()
         return false
     end
 
-    local crateReady, crateStatus, crateAlreadyBoosted = Extra.getCrateReadiness()
+    local crateReady, crateStatus, crateAlreadyBoosted, crateClaimable = Extra.getCrateReadiness()
     if not crateReady then
         Extra.setBuffComboStatus(crateStatus)
         return false
@@ -3193,9 +3218,7 @@ function Extra.finishBuffCombo()
         Extra.BuffComboReadyTotemId = totemId
     end
 
-    if crateAlreadyBoosted then
-        Extra.setBuffComboStatus("Using already-active crate boost.")
-    else
+    if crateClaimable then
         Extra.setBuffComboStatus("Claiming crate boost...")
         if fireCrateBoost("goldenCrate", 1, 0) < 1 then
             Extra.setBuffComboStatus("Crate claim failed.")
@@ -3204,6 +3227,11 @@ function Extra.finishBuffCombo()
         Extra.BuffComboLastCrateClaimAt = os.clock()
         Extra.clearLocalCrateVisuals()
         task.wait(0.15)
+    elseif crateAlreadyBoosted then
+        Extra.setBuffComboStatus("Using already-active crate boost.")
+    else
+        Extra.setBuffComboStatus(crateStatus)
+        return false
     end
 
     if Toggles.ToggleBuffComboRequireTotem and Toggles.ToggleBuffComboRequireTotem.Value
