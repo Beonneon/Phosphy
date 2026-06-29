@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.2.4",
+    Version = "1.2.5",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -77,12 +77,15 @@ local Extra = {
     SpawnIdQueue = {},
     SpawnIdQueued = {},
     BuffComboMidasCount = 0,
+    BuffComboMidasCountSource = "fallback",
     BuffComboHeldGoldBar = nil,
     BuffComboLastCrateClaimAt = 0,
     BuffComboRunning = false,
     BuffComboFreshTotemId = nil,
     BuffComboFreshTotemExpiresAt = 0,
     BuffComboIgnoredTotems = {},
+    BuffComboAwaitingMidasServerUpdate = false,
+    BuffComboAwaitingMidasPrevious = nil,
 }
 local ReadyActionLastFiredAt = {}
 local PotionRequestedUntil = {}
@@ -2439,6 +2442,7 @@ function Extra.setBuffComboStatus(message)
     local text = tostring(message)
     Marker:SetAttribute("BuffComboStatus", text)
     Marker:SetAttribute("BuffComboMidasCount", Extra.BuffComboMidasCount)
+    Marker:SetAttribute("BuffComboMidasCountSource", Extra.BuffComboMidasCountSource or "fallback")
     Marker:SetAttribute("BuffComboHasHeldGoldBar", Extra.BuffComboHeldGoldBar ~= nil)
 
     if Extra.BuffComboStatusLabel then
@@ -2652,9 +2656,17 @@ end
 function Extra.syncBuffComboMidasCount()
     if Toggles.ToggleBuffComboAutoTrackMidas and Toggles.ToggleBuffComboAutoTrackMidas.Value then
         local profileCount, source = Extra.profileMidasCount()
-        if profileCount and profileCount > Extra.BuffComboMidasCount then
-            Extra.BuffComboMidasCount = math.min(10, profileCount)
-            Marker:SetAttribute("BuffComboMidasCountSource", source)
+        if profileCount then
+            local nextCount = math.clamp(math.floor(profileCount), 0, 10)
+            if Extra.BuffComboAwaitingMidasServerUpdate
+                and nextCount ~= Extra.BuffComboAwaitingMidasPrevious then
+                Extra.BuffComboAwaitingMidasServerUpdate = false
+                Extra.BuffComboAwaitingMidasPrevious = nil
+            end
+
+            Extra.BuffComboMidasCount = nextCount
+            Extra.BuffComboMidasCountSource = "profile:" .. tostring(source)
+            Marker:SetAttribute("BuffComboMidasCountSource", Extra.BuffComboMidasCountSource)
             return true
         end
     end
@@ -2727,15 +2739,28 @@ function Extra.handleBuffComboGoldBar(id, position)
 
     local holdCount = Extra.getBuffComboHoldCount()
     local key = tostring(id)
+    local hasServerCount = Extra.syncBuffComboMidasCount()
 
     if Extra.BuffComboMidasCount < holdCount then
+        if not hasServerCount then
+            Extra.setBuffComboStatus("No server Midas count found. Set fallback to "
+                .. tostring(holdCount) .. " when the next bar should be held.")
+            return true
+        end
+
+        if Extra.BuffComboAwaitingMidasServerUpdate then
+            Extra.setBuffComboStatus("Waiting for server Midas count update. Current: "
+                .. tostring(Extra.BuffComboMidasCount) .. "/" .. tostring(holdCount) .. ".")
+            return true
+        end
+
         task.spawn(function()
+            local previousCount = Extra.BuffComboMidasCount
             if collectMidasGoldBar(id, position) then
-                Extra.BuffComboMidasCount = math.min(holdCount, Extra.BuffComboMidasCount + 1)
-                Extra.setBuffComboStatus(
-                    "Collected Midas bar " .. tostring(Extra.BuffComboMidasCount) .. "/" .. tostring(holdCount)
-                        .. ". Waiting before final buff."
-                )
+                Extra.BuffComboAwaitingMidasServerUpdate = true
+                Extra.BuffComboAwaitingMidasPrevious = previousCount
+                Extra.setBuffComboStatus("Collected Midas bar; waiting for server count to move past "
+                    .. tostring(previousCount) .. ".")
             end
         end)
         return true
@@ -2836,6 +2861,9 @@ function Extra.startBuffCombo()
     Extra.BuffComboHeldGoldBar = nil
     Extra.BuffComboTotemAlreadyActive = false
     Extra.BuffComboReadyTotemId = nil
+    Extra.BuffComboMidasCountSource = "fallback"
+    Extra.BuffComboAwaitingMidasServerUpdate = false
+    Extra.BuffComboAwaitingMidasPrevious = nil
     Extra.BuffComboFreshTotemId = nil
     Extra.BuffComboFreshTotemExpiresAt = 0
     Extra.BuffComboIgnoredTotems = {}
@@ -2854,7 +2882,8 @@ function Extra.startBuffCombo()
             else
                 Extra.setBuffComboStatus("Collecting Midas bars until "
                     .. tostring(Extra.getBuffComboHoldCount()) .. ". Current: "
-                    .. tostring(Extra.BuffComboMidasCount) .. ".")
+                    .. tostring(Extra.BuffComboMidasCount) .. " from "
+                    .. tostring(Extra.BuffComboMidasCountSource or "fallback") .. ".")
             end
 
             task.wait(1)
@@ -4622,7 +4651,7 @@ BuffComboBox:AddCheckbox("ToggleBuffComboBuyPotion", {
     Default = true,
 })
 BuffComboBox:AddCheckbox("ToggleBuffComboAutoTrackMidas", {
-    Text = "Auto Track Midas",
+    Text = "Sync Profile Midas",
     Default = true,
 })
 BuffComboBox:AddCheckbox("ToggleBuffComboRequireTotem", {
@@ -4641,6 +4670,9 @@ BuffComboBox:AddButton({
     Text = "Reset Combo Count",
     Func = function()
         Extra.BuffComboMidasCount = math.clamp(math.floor(getNumberOption("BuffComboMidasStartCount", 0)), 0, 9)
+        Extra.BuffComboMidasCountSource = "fallback"
+        Extra.BuffComboAwaitingMidasServerUpdate = false
+        Extra.BuffComboAwaitingMidasPrevious = nil
         Extra.BuffComboHeldGoldBar = nil
         Extra.setBuffComboStatus("Combo count reset to " .. tostring(Extra.BuffComboMidasCount) .. ".")
     end,
@@ -4906,8 +4938,12 @@ Options.PlayerSpeed:OnChanged(function()
     end
 end)
 Options.BuffComboMidasStartCount:OnChanged(function()
-    if not (Toggles.ToggleBuffCombo and Toggles.ToggleBuffCombo.Value) then
+    if not (Toggles.ToggleBuffCombo and Toggles.ToggleBuffCombo.Value)
+        or Extra.BuffComboMidasCountSource == "fallback" then
         Extra.BuffComboMidasCount = math.clamp(math.floor(getNumberOption("BuffComboMidasStartCount", 0)), 0, 9)
+        Extra.BuffComboMidasCountSource = "fallback"
+        Extra.BuffComboAwaitingMidasServerUpdate = false
+        Extra.BuffComboAwaitingMidasPrevious = nil
         Extra.setBuffComboStatus("Combo count set to " .. tostring(Extra.BuffComboMidasCount) .. ".")
     end
 end)
