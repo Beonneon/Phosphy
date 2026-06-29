@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.2.6",
+    Version = "1.2.7",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -1694,11 +1694,11 @@ local PotionOptions = {
 }
 
 Extra.ComboPotionOptions = {
-    { label = "Godly Potion", id = "godlyPotion", inventory = "godlyPotions" },
-    { label = "Rainbow Potion", id = "rainbowPotion", inventory = "rainbowPotions" },
-    { label = "Energy Potion", id = "energyPotion", inventory = "energyPotions" },
-    { label = "Amulet Luck Potion", id = "amuletLuckPotion", inventory = "amuletLuckPotions" },
-    { label = "Elemental Potion", id = "elementalPotion", inventory = "elementalPotions" },
+    { label = "Godly Potion", id = "godlyPotion", inventory = "godlyPotions", costCurrency = "sp", costAmount = 10 },
+    { label = "Rainbow Potion", id = "rainbowPotion", inventory = "rainbowPotions", costCurrency = "sp", costAmount = 49, skipIfRemainingAbove = 600 },
+    { label = "Energy Potion", id = "energyPotion", inventory = "energyPotions", costCurrency = "rt", costAmount = 15 },
+    { label = "Amulet Luck Potion", id = "amuletLuckPotion", inventory = "amuletLuckPotions", costCurrency = "sd", costAmount = 49 },
+    { label = "Elemental Potion", id = "elementalPotion", inventory = "elementalPotions", costCurrency = "sd", costAmount = 250 },
 }
 Extra.ComboPotionLabels = {}
 Extra.ComboPotionByLabel = {}
@@ -1855,6 +1855,10 @@ local function upgradeBoardLabels(board)
 end
 
 local function multiSelectionContains(selection, label)
+    if typeof(selection) == "string" then
+        return selection == label
+    end
+
     if typeof(selection) ~= "table" then
         return false
     end
@@ -2488,9 +2492,26 @@ function Extra.getBuffComboHoldCount()
     return math.clamp(math.floor(getNumberOption("BuffComboHoldMidasCount", 9)), 1, 9)
 end
 
+function Extra.getSelectedComboPotions()
+    local option = Options.BuffComboPotion
+    local selection = option and option.Value
+    local selected = {}
+
+    for _, potion in ipairs(Extra.ComboPotionOptions) do
+        if multiSelectionContains(selection, potion.label) then
+            selected[#selected + 1] = potion
+        end
+    end
+
+    if #selected == 0 then
+        selected[#selected + 1] = Extra.ComboPotionByLabel["Godly Potion"] or Extra.ComboPotionOptions[1]
+    end
+
+    return selected
+end
+
 function Extra.getBuffComboPotion()
-    local label = Options.BuffComboPotion and Options.BuffComboPotion.Value or "Godly Potion"
-    return Extra.ComboPotionByLabel[label] or Extra.ComboPotionOptions[1]
+    return Extra.getSelectedComboPotions()[1]
 end
 
 function Extra.getCrateController()
@@ -2560,6 +2581,10 @@ function Extra.clearLocalCrateVisuals()
 end
 
 function Extra.getCrateReadiness()
+    if Extra.getCrateBoostActive and Extra.getCrateBoostActive() == true then
+        return true, "Crate boost already active.", true
+    end
+
     local sinceClaim = os.clock() - (Extra.BuffComboLastCrateClaimAt or 0)
     if Extra.BuffComboLastCrateClaimAt > 0 and sinceClaim < 1000 then
         return false, "Crate remote cooldown: " .. tostring(math.ceil(1000 - sinceClaim)) .. "s"
@@ -2731,6 +2756,111 @@ function Extra.boostActiveText(boostIds, positiveValue)
     return sawUnknown and "unknown" or "false"
 end
 
+function Extra.getCrateBoostActive()
+    local sawUnknown = false
+    for _, boostId in ipairs({ "goldenCrateDrop", "crateDrop" }) do
+        local active = isBoostActive(boostId)
+        if active == true then
+            return true
+        end
+        if active == nil then
+            sawUnknown = true
+        end
+    end
+
+    return sawUnknown and nil or false
+end
+
+function Extra.profileCurrencyAmount(currency)
+    local profile = getProfileData()
+    if typeof(profile) ~= "table" then
+        return nil
+    end
+
+    local keys = {
+        tostring(currency),
+        tostring(currency):upper(),
+        tostring(currency):lower(),
+    }
+
+    for _, key in ipairs(keys) do
+        local value = tonumber(profile[key])
+        if value ~= nil then
+            return value
+        end
+    end
+
+    for _, containerName in ipairs({ "currencies", "currency", "wallet" }) do
+        local container = profile[containerName]
+        if typeof(container) == "table" then
+            for _, key in ipairs(keys) do
+                local value = tonumber(container[key])
+                if value ~= nil then
+                    return value
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+function Extra.potionShouldUse(potion)
+    local active, remaining = Extra.getBoostRemainingSeconds(potion.id)
+    if active == nil then
+        return nil, "Waiting for boost state."
+    end
+
+    if active == true then
+        local threshold = tonumber(potion.skipIfRemainingAbove)
+        if threshold and typeof(remaining) == "number" and remaining <= threshold then
+            return true, potion.label .. " is under refresh threshold."
+        end
+
+        if threshold then
+            return false, potion.label .. " active" .. Extra.formatShortSeconds(remaining) .. "."
+        end
+
+        return false, potion.label .. " already active."
+    end
+
+    return true, potion.label .. " is not active."
+end
+
+function Extra.checkComboPotionBudget(potions)
+    local profile = getProfileData()
+    if typeof(profile) ~= "table" then
+        return false, "Waiting for profile before buying combo potions."
+    end
+
+    local needed = {}
+    for _, potion in ipairs(potions) do
+        local shouldUse, reason = Extra.potionShouldUse(potion)
+        if shouldUse == nil then
+            return false, reason
+        end
+
+        local owned = tonumber(profile[potion.inventory]) or 0
+        if shouldUse and owned <= 0 then
+            local currency = tostring(potion.costCurrency or "sp")
+            needed[currency] = (needed[currency] or 0) + (tonumber(potion.costAmount) or 0)
+        end
+    end
+
+    for currency, totalCost in pairs(needed) do
+        local balance = Extra.profileCurrencyAmount(currency)
+        if balance == nil then
+            return false, "Waiting for " .. tostring(currency):upper() .. " balance before buying combo potions."
+        end
+        if balance < totalCost then
+            return false, "Need " .. tostring(totalCost) .. " " .. tostring(currency):upper()
+                .. " for selected potions; have " .. tostring(balance) .. "."
+        end
+    end
+
+    return true, "Potion budget ready."
+end
+
 function Extra.boolStatus(value)
     if value == nil then
         return "unknown"
@@ -2749,9 +2879,11 @@ function Extra.updateBuffComboInfo()
         or tostring(Extra.BuffComboMidasCountSource or "fallback")
 
     local totemReady, totemId = Extra.hasKnownTotem()
-    local crateReady, crateStatus = Extra.getCrateReadiness()
-    local potion = Extra.getBuffComboPotion()
-    local potionStatus = potion and Extra.boostActiveText(potion.id) or "none"
+    local crateReady, crateStatus, crateAlreadyBoosted = Extra.getCrateReadiness()
+    local potionParts = {}
+    for _, potion in ipairs(Extra.getSelectedComboPotions()) do
+        potionParts[#potionParts + 1] = potion.label .. "=" .. Extra.boostActiveText(potion.id)
+    end
     local lines = {
         "Midas boost: " .. Extra.boostActiveText("midasBob"),
         "Midas bar: " .. tostring(math.clamp(math.floor(tonumber(midasCount) or 0), 0, 10))
@@ -2760,9 +2892,9 @@ function Extra.updateBuffComboInfo()
             .. (totemId and totemId ~= "active" and (" [" .. tostring(totemId) .. "]") or ""),
         "Totem boost: " .. Extra.boostActiveText("totem", true),
         "Crate boost: " .. Extra.boostActiveText({ "goldenCrateDrop", "crateDrop" }),
-        "Crate available: " .. Extra.boolStatus(crateReady),
+        "Crate available: " .. Extra.boolStatus(crateReady and not crateAlreadyBoosted),
         "Crate status: " .. tostring(crateStatus),
-        "Potion: " .. tostring(potion and potion.label or "none") .. " - " .. potionStatus,
+        "Potions: " .. table.concat(potionParts, ", "),
     }
     local text = table.concat(lines, "\n")
 
@@ -2787,14 +2919,29 @@ function Extra.purchaseComboPotionIfNeeded(potion)
         return true, "No potion selected."
     end
 
-    if isBoostActive(potion.id) == true then
-        return true, potion.label .. " is already active."
+    local shouldUse, useReason = Extra.potionShouldUse(potion)
+    if shouldUse == nil then
+        return false, useReason
+    end
+    if not shouldUse then
+        return true, useReason, false
     end
 
     local profile = getProfileData()
     local owned = profile and tonumber(profile[potion.inventory]) or nil
     local shouldBuy = Toggles.ToggleBuffComboBuyPotion and Toggles.ToggleBuffComboBuyPotion.Value
     if (owned == nil or owned <= 0) and shouldBuy then
+        local currency = tostring(potion.costCurrency or "sp")
+        local cost = tonumber(potion.costAmount) or 0
+        local balance = Extra.profileCurrencyAmount(currency)
+        if balance == nil then
+            return false, "Waiting for " .. currency:upper() .. " balance before buying " .. potion.label .. "."
+        end
+        if balance < cost then
+            return false, "Need " .. tostring(cost) .. " " .. currency:upper() .. " for "
+                .. potion.label .. "; have " .. tostring(balance) .. "."
+        end
+
         local purchase = getPurchaseShopItemRemote()
         if not purchase then
             return false, "PurchaseShopItem remote was not found."
@@ -2807,23 +2954,18 @@ function Extra.purchaseComboPotionIfNeeded(potion)
         return false, "No " .. potion.label .. " owned."
     end
 
-    return true, "Potion ready."
+    return true, "Potion ready.", true
 end
 
 function Extra.useComboPotion()
-    local potion = Extra.getBuffComboPotion()
-    if not potion then
+    local potions = Extra.getSelectedComboPotions()
+    if #potions == 0 then
         return true
     end
 
-    if isBoostActive(potion.id) == true then
-        Marker:SetAttribute("BuffComboLastPotionUsed", potion.id .. ":already-active")
-        return true
-    end
-
-    local ok, reason = Extra.purchaseComboPotionIfNeeded(potion)
-    if not ok then
-        Extra.setBuffComboStatus(reason)
+    local budgetOk, budgetReason = Extra.checkComboPotionBudget(potions)
+    if not budgetOk then
+        Extra.setBuffComboStatus(budgetReason)
         return false
     end
 
@@ -2833,10 +2975,27 @@ function Extra.useComboPotion()
         return false
     end
 
-    remote:FireServer(potion.id)
-    PotionRequestedUntil[potion.id] = os.clock() + 5
-    Marker:SetAttribute("BuffComboLastPotionUsed", potion.id)
-    task.wait(0.1)
+    local used = {}
+    local skipped = {}
+    for _, potion in ipairs(potions) do
+        local ok, reason, shouldFire = Extra.purchaseComboPotionIfNeeded(potion)
+        if not ok then
+            Extra.setBuffComboStatus(reason)
+            return false
+        end
+
+        if shouldFire then
+            remote:FireServer(potion.id)
+            PotionRequestedUntil[potion.id] = os.clock() + 5
+            used[#used + 1] = potion.id
+            task.wait(0.1)
+        else
+            skipped[#skipped + 1] = potion.id .. ":" .. tostring(reason)
+        end
+    end
+
+    Marker:SetAttribute("BuffComboLastPotionUsed", table.concat(used, ","))
+    Marker:SetAttribute("BuffComboLastPotionSkipped", table.concat(skipped, " | "))
     return true
 end
 
@@ -2893,7 +3052,7 @@ function Extra.finishBuffCombo()
         return false
     end
 
-    local crateReady, crateStatus = Extra.getCrateReadiness()
+    local crateReady, crateStatus, crateAlreadyBoosted = Extra.getCrateReadiness()
     if not crateReady then
         Extra.setBuffComboStatus(crateStatus)
         return false
@@ -2913,14 +3072,18 @@ function Extra.finishBuffCombo()
         Extra.BuffComboReadyTotemId = totemId
     end
 
-    Extra.setBuffComboStatus("Claiming crate boost...")
-    if fireCrateBoost("goldenCrate", 1, 0) < 1 then
-        Extra.setBuffComboStatus("Crate claim failed.")
-        return false
+    if crateAlreadyBoosted then
+        Extra.setBuffComboStatus("Using already-active crate boost.")
+    else
+        Extra.setBuffComboStatus("Claiming crate boost...")
+        if fireCrateBoost("goldenCrate", 1, 0) < 1 then
+            Extra.setBuffComboStatus("Crate claim failed.")
+            return false
+        end
+        Extra.BuffComboLastCrateClaimAt = os.clock()
+        Extra.clearLocalCrateVisuals()
+        task.wait(0.15)
     end
-    Extra.BuffComboLastCrateClaimAt = os.clock()
-    Extra.clearLocalCrateVisuals()
-    task.wait(0.15)
 
     if Toggles.ToggleBuffComboRequireTotem and Toggles.ToggleBuffComboRequireTotem.Value
         and not Extra.BuffComboTotemAlreadyActive then
@@ -4736,9 +4899,11 @@ MidasBox:AddCheckbox("ToggleAutoMidasGold", {
 do
 local BuffComboBox = Tabs.Automation:AddRightGroupbox("Buff Combo", "timer-reset")
 BuffComboBox:AddDropdown("BuffComboPotion", {
-    Text = "Potion",
+    Text = "Potions",
     Values = Extra.ComboPotionLabels,
-    Default = "Godly Potion",
+    Multi = true,
+    AllowNull = true,
+    Default = { "Godly Potion", "Rainbow Potion" },
 })
 BuffComboBox:AddSlider("BuffComboMidasStartCount", {
     Text = "Fallback Midas Count",
