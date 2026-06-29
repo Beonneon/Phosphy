@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.2.2",
+    Version = "1.2.3",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -76,6 +76,10 @@ local Extra = {
     CleanbotRollSerial = 0,
     SpawnIdQueue = {},
     SpawnIdQueued = {},
+    BuffComboMidasCount = 0,
+    BuffComboHeldGoldBar = nil,
+    BuffComboLastCrateClaimAt = 0,
+    BuffComboRunning = false,
 }
 local ReadyActionLastFiredAt = {}
 local PotionRequestedUntil = {}
@@ -319,6 +323,14 @@ local function getUsePotionRemote()
         return nil
     end
     return remotes:FindFirstChild("UsePotion") or remotes:WaitForChild("UsePotion", 10)
+end
+
+local function getPurchaseShopItemRemote()
+    local remotes = getRemotes()
+    if not remotes then
+        return nil
+    end
+    return remotes:FindFirstChild("PurchaseShopItem") or remotes:WaitForChild("PurchaseShopItem", 10)
 end
 
 local function getActivatePlinkoBallRemote()
@@ -1515,6 +1527,9 @@ local function connectMidasGoldEvents()
     if spawned and not Connections.MidasGoldBarSpawned then
         Connections.MidasGoldBarSpawned = spawned.OnClientEvent:Connect(function(id, position)
             Marker:SetAttribute("MidasLastGoldBarSpawnedAt", Workspace:GetServerTimeNow())
+            if Extra.handleBuffComboGoldBar and Extra.handleBuffComboGoldBar(id, position) then
+                return
+            end
             if Toggles.ToggleAutoMidasGold and Toggles.ToggleAutoMidasGold.Value then
                 task.spawn(collectMidasGoldBar, id, position)
             end
@@ -1643,6 +1658,20 @@ local PotionOptions = {
     { id = "amuletLuckPotion", toggle = "TogglePotionAmuletLuck" },
     { id = "elementalPotion", toggle = "TogglePotionElemental" },
 }
+
+Extra.ComboPotionOptions = {
+    { label = "Godly Potion", id = "godlyPotion", inventory = "godlyPotions" },
+    { label = "Rainbow Potion", id = "rainbowPotion", inventory = "rainbowPotions" },
+    { label = "Energy Potion", id = "energyPotion", inventory = "energyPotions" },
+    { label = "Amulet Luck Potion", id = "amuletLuckPotion", inventory = "amuletLuckPotions" },
+    { label = "Elemental Potion", id = "elementalPotion", inventory = "elementalPotions" },
+}
+Extra.ComboPotionLabels = {}
+Extra.ComboPotionByLabel = {}
+for _, potion in ipairs(Extra.ComboPotionOptions) do
+    Extra.ComboPotionLabels[#Extra.ComboPotionLabels + 1] = potion.label
+    Extra.ComboPotionByLabel[potion.label] = potion
+end
 
 local AutoUpgradeBoards = {
     {
@@ -2392,6 +2421,326 @@ end
 local function startAutoTotemContact()
     connectTotemEvents()
     claimKnownTotems()
+end
+
+function Extra.setBuffComboStatus(message)
+    local text = tostring(message)
+    Marker:SetAttribute("BuffComboStatus", text)
+    Marker:SetAttribute("BuffComboMidasCount", Extra.BuffComboMidasCount)
+    Marker:SetAttribute("BuffComboHasHeldGoldBar", Extra.BuffComboHeldGoldBar ~= nil)
+
+    if Extra.BuffComboStatusLabel then
+        pcall(function()
+            Extra.BuffComboStatusLabel:SetText(text)
+        end)
+    end
+end
+
+function Extra.buffComboEnabled()
+    return Toggles.ToggleBuffCombo and Toggles.ToggleBuffCombo.Value or false
+end
+
+function Extra.getBuffComboHoldCount()
+    return math.clamp(math.floor(getNumberOption("BuffComboHoldMidasCount", 9)), 1, 9)
+end
+
+function Extra.getBuffComboPotion()
+    local label = Options.BuffComboPotion and Options.BuffComboPotion.Value or "Godly Potion"
+    return Extra.ComboPotionByLabel[label] or Extra.ComboPotionOptions[1]
+end
+
+function Extra.getCrateController()
+    local now = os.clock()
+    if Extra.CrateController and now - (Extra.CrateControllerCheckedAt or 0) < 30 then
+        return Extra.CrateController
+    end
+    if Extra.CrateControllerFailedAt and now - Extra.CrateControllerFailedAt < 5 then
+        return nil
+    end
+
+    Extra.CrateControllerCheckedAt = now
+    local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts")
+    local client = playerScripts and playerScripts:FindFirstChild("Client")
+    local controllers = client and client:FindFirstChild("Controllers")
+    local module = controllers and controllers:FindFirstChild("CrateController")
+    if not (module and module:IsA("ModuleScript")) then
+        Extra.CrateControllerFailedAt = now
+        return nil
+    end
+
+    local ok, controller = pcall(require, module)
+    if ok and typeof(controller) == "table" then
+        Extra.CrateController = controller
+        Extra.CrateControllerFailedAt = nil
+        return controller
+    end
+
+    Extra.CrateControllerFailedAt = now
+    Marker:SetAttribute("BuffComboCrateRequireError", tostring(controller))
+    return nil
+end
+
+function Extra.findClaimableCratePrompt()
+    local directNames = { "GoldenSlimeCrate", "SlimeCrate" }
+    for _, name in ipairs(directNames) do
+        local crate = Workspace:FindFirstChild(name)
+        local prompt = crate and crate:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if prompt and prompt.Enabled then
+            return prompt
+        end
+    end
+
+    for _, child in ipairs(Workspace:GetChildren()) do
+        local lower = child.Name:lower()
+        if lower:find("crate", 1, true) then
+            local prompt = child:FindFirstChildWhichIsA("ProximityPrompt", true)
+            if prompt and prompt.Enabled then
+                return prompt
+            end
+        end
+    end
+
+    return nil
+end
+
+function Extra.clearLocalCrateVisuals()
+    for _, child in ipairs(Workspace:GetChildren()) do
+        local lower = child.Name:lower()
+        if lower == "slimecrate" or lower == "goldenslimecrate"
+            or (lower:find("crate", 1, true) and child:FindFirstChild("MainCrate", true)) then
+            pcall(function()
+                child:Destroy()
+            end)
+        end
+    end
+end
+
+function Extra.getCrateReadiness()
+    local sinceClaim = os.clock() - (Extra.BuffComboLastCrateClaimAt or 0)
+    if Extra.BuffComboLastCrateClaimAt > 0 and sinceClaim < 1000 then
+        return false, "Crate remote cooldown: " .. tostring(math.ceil(1000 - sinceClaim)) .. "s"
+    end
+
+    local controller = Extra.getCrateController()
+    if controller and typeof(controller.isCrateActive) == "function" then
+        local ok, active = pcall(controller.isCrateActive)
+        if ok and active == true then
+            return true, "Crate is active."
+        end
+    end
+
+    local prompt = Extra.findClaimableCratePrompt()
+    if prompt then
+        return true, "Crate prompt found."
+    end
+
+    if controller and typeof(controller.getNextSpawnTime) == "function" then
+        local ok, nextSpawn = pcall(controller.getNextSpawnTime)
+        if ok and typeof(nextSpawn) == "number" then
+            local remaining = math.max(0, math.ceil(nextSpawn - Workspace:GetServerTimeNow()))
+            return false, "Waiting for crate: " .. tostring(remaining) .. "s"
+        end
+    end
+
+    return false, "Waiting for claimable crate."
+end
+
+function Extra.hasKnownTotem()
+    if isBoostActive("totem") == true then
+        return true, "active"
+    end
+
+    for id in pairs(TotemIds) do
+        return true, id
+    end
+    return false, nil
+end
+
+function Extra.purchaseComboPotionIfNeeded(potion)
+    if not potion then
+        return true, "No potion selected."
+    end
+
+    if isBoostActive(potion.id) == true then
+        return true, potion.label .. " is already active."
+    end
+
+    local profile = getProfileData()
+    local owned = profile and tonumber(profile[potion.inventory]) or nil
+    local shouldBuy = Toggles.ToggleBuffComboBuyPotion and Toggles.ToggleBuffComboBuyPotion.Value
+    if (owned == nil or owned <= 0) and shouldBuy then
+        local purchase = getPurchaseShopItemRemote()
+        if not purchase then
+            return false, "PurchaseShopItem remote was not found."
+        end
+
+        purchase:FireServer(potion.id)
+        Marker:SetAttribute("BuffComboLastPotionPurchase", potion.id)
+        task.wait(0.25)
+    elseif owned ~= nil and owned <= 0 then
+        return false, "No " .. potion.label .. " owned."
+    end
+
+    return true, "Potion ready."
+end
+
+function Extra.useComboPotion()
+    local potion = Extra.getBuffComboPotion()
+    if not potion then
+        return true
+    end
+
+    if isBoostActive(potion.id) == true then
+        Marker:SetAttribute("BuffComboLastPotionUsed", potion.id .. ":already-active")
+        return true
+    end
+
+    local ok, reason = Extra.purchaseComboPotionIfNeeded(potion)
+    if not ok then
+        Extra.setBuffComboStatus(reason)
+        return false
+    end
+
+    local remote = getUsePotionRemote()
+    if not remote then
+        Extra.setBuffComboStatus("UsePotion remote was not found.")
+        return false
+    end
+
+    remote:FireServer(potion.id)
+    PotionRequestedUntil[potion.id] = os.clock() + 5
+    Marker:SetAttribute("BuffComboLastPotionUsed", potion.id)
+    task.wait(0.1)
+    return true
+end
+
+function Extra.handleBuffComboGoldBar(id, position)
+    if not Extra.buffComboEnabled() then
+        return false
+    end
+
+    local holdCount = Extra.getBuffComboHoldCount()
+    local key = tostring(id)
+
+    if Extra.BuffComboMidasCount < holdCount then
+        task.spawn(function()
+            if collectMidasGoldBar(id, position) then
+                Extra.BuffComboMidasCount = math.min(holdCount, Extra.BuffComboMidasCount + 1)
+                Extra.setBuffComboStatus(
+                    "Collected Midas bar " .. tostring(Extra.BuffComboMidasCount) .. "/" .. tostring(holdCount)
+                        .. ". Waiting before final buff."
+                )
+            end
+        end)
+        return true
+    end
+
+    Extra.BuffComboHeldGoldBar = {
+        id = id,
+        position = position,
+        receivedAt = os.clock(),
+    }
+    Marker:SetAttribute("BuffComboHeldGoldBarId", key)
+    Extra.setBuffComboStatus("Holding final Midas bar " .. key .. " until crate + totem + potion are ready.")
+    return true
+end
+
+function Extra.finishBuffCombo()
+    local held = Extra.BuffComboHeldGoldBar
+    if not held then
+        Extra.setBuffComboStatus("Waiting for the final Midas bar to spawn.")
+        return false
+    end
+
+    local crateReady, crateStatus = Extra.getCrateReadiness()
+    if not crateReady then
+        Extra.setBuffComboStatus(crateStatus)
+        return false
+    end
+
+    if Toggles.ToggleBuffComboRequireTotem and Toggles.ToggleBuffComboRequireTotem.Value then
+        local hasTotem, totemId = Extra.hasKnownTotem()
+        if not hasTotem then
+            Extra.setBuffComboStatus("Waiting for a totem spawn id.")
+            return false
+        end
+        Extra.BuffComboTotemAlreadyActive = totemId == "active"
+    end
+
+    Extra.setBuffComboStatus("Claiming crate boost...")
+    if fireCrateBoost("goldenCrate", 1, 0) < 1 then
+        Extra.setBuffComboStatus("Crate claim failed.")
+        return false
+    end
+    Extra.BuffComboLastCrateClaimAt = os.clock()
+    Extra.clearLocalCrateVisuals()
+    task.wait(0.15)
+
+    if Toggles.ToggleBuffComboRequireTotem and Toggles.ToggleBuffComboRequireTotem.Value
+        and not Extra.BuffComboTotemAlreadyActive then
+        local claimed = claimKnownTotems()
+        Marker:SetAttribute("BuffComboTotemsClaimed", claimed)
+        if claimed < 1 then
+            Extra.setBuffComboStatus("Totem disappeared before claim.")
+            return false
+        end
+    end
+
+    Extra.setBuffComboStatus("Using combo potion...")
+    if not Extra.useComboPotion() then
+        return false
+    end
+
+    Extra.setBuffComboStatus("Collecting final Midas bar for x5 buff...")
+    if collectMidasGoldBar(held.id, held.position) then
+        Extra.BuffComboHeldGoldBar = nil
+        Extra.BuffComboMidasCount = Extra.getBuffComboHoldCount() + 1
+        Extra.setBuffComboStatus("Combo fired: crate + totem + potion + Midas.")
+        task.defer(function()
+            if Toggles.ToggleBuffCombo then
+                Toggles.ToggleBuffCombo:SetValue(false)
+            end
+        end)
+        return true
+    end
+
+    Extra.setBuffComboStatus("Final Midas bar collect failed; keeping it held.")
+    return false
+end
+
+function Extra.startBuffCombo()
+    stopTask("BuffCombo")
+    connectMidasGoldEvents()
+    connectTotemEvents()
+
+    Extra.BuffComboMidasCount = math.clamp(math.floor(getNumberOption("BuffComboMidasStartCount", 0)), 0, 9)
+    Extra.BuffComboHeldGoldBar = nil
+    Extra.BuffComboTotemAlreadyActive = false
+    Extra.BuffComboRunning = true
+    Extra.setBuffComboStatus("Buff combo armed. Midas count " .. tostring(Extra.BuffComboMidasCount) .. "/"
+        .. tostring(Extra.getBuffComboHoldCount()) .. ".")
+
+    Tasks.BuffCombo = task.spawn(function()
+        while Extra.buffComboEnabled() do
+            if Extra.BuffComboMidasCount >= Extra.getBuffComboHoldCount() then
+                Extra.finishBuffCombo()
+            else
+                Extra.setBuffComboStatus("Collecting Midas bars until "
+                    .. tostring(Extra.getBuffComboHoldCount()) .. ". Current: "
+                    .. tostring(Extra.BuffComboMidasCount) .. ".")
+            end
+
+            task.wait(1)
+        end
+
+        Extra.BuffComboRunning = false
+    end)
+end
+
+function Extra.stopBuffCombo()
+    stopTask("BuffCombo")
+    Extra.BuffComboRunning = false
+    Extra.setBuffComboStatus("Buff combo is off.")
 end
 
 local AmuletCountValues = { "1", "2", "3", "4" }
@@ -4120,6 +4469,53 @@ MidasBox:AddCheckbox("ToggleAutoMidasGold", {
     Default = true,
 })
 
+do
+local BuffComboBox = Tabs.Automation:AddRightGroupbox("Buff Combo", "timer-reset")
+BuffComboBox:AddDropdown("BuffComboPotion", {
+    Text = "Potion",
+    Values = Extra.ComboPotionLabels,
+    Default = "Godly Potion",
+})
+BuffComboBox:AddSlider("BuffComboMidasStartCount", {
+    Text = "Current Midas Count",
+    Min = 0,
+    Max = 9,
+    Default = 0,
+    Rounding = 0,
+})
+BuffComboBox:AddSlider("BuffComboHoldMidasCount", {
+    Text = "Hold At Midas Count",
+    Min = 1,
+    Max = 9,
+    Default = 9,
+    Rounding = 0,
+})
+BuffComboBox:AddCheckbox("ToggleBuffComboBuyPotion", {
+    Text = "Buy Potion If Missing",
+    Default = true,
+})
+BuffComboBox:AddCheckbox("ToggleBuffComboRequireTotem", {
+    Text = "Require Totem",
+    Default = true,
+})
+BuffComboBox:AddCheckbox("ToggleBuffCombo", {
+    Text = "Run One Buff Combo",
+    Default = false,
+})
+BuffComboBox:AddButton({
+    Text = "Reset Combo Count",
+    Func = function()
+        Extra.BuffComboMidasCount = math.clamp(math.floor(getNumberOption("BuffComboMidasStartCount", 0)), 0, 9)
+        Extra.BuffComboHeldGoldBar = nil
+        Extra.setBuffComboStatus("Combo count reset to " .. tostring(Extra.BuffComboMidasCount) .. ".")
+    end,
+})
+Extra.BuffComboStatusLabel = BuffComboBox:AddLabel({
+    Text = "Buff combo is off.",
+    DoesWrap = true,
+})
+end
+
 local GemStormBox = Tabs.Automation:AddRightGroupbox("Gem Storm", "gem")
 GemStormBox:AddCheckbox("ToggleAutoGemStorm", {
     Text = "Auto Gem Storm",
@@ -4347,6 +4743,13 @@ Toggles.ToggleAutoMidasGold:OnChanged(function(state)
         connectMidasGoldEvents()
     end
 end)
+Toggles.ToggleBuffCombo:OnChanged(function(state)
+    if state then
+        Extra.startBuffCombo()
+    else
+        Extra.stopBuffCombo()
+    end
+end)
 Toggles.ToggleAutoFarm:OnChanged(function(state)
     Marker:SetAttribute("AutoFarmEnabled", state == true)
 end)
@@ -4365,6 +4768,12 @@ Options.CollectorBatchSize:OnChanged(updateMarker)
 Options.PlayerSpeed:OnChanged(function()
     if Toggles.TogglePlayerSpeed and Toggles.TogglePlayerSpeed.Value then
         applyPlayerSpeed()
+    end
+end)
+Options.BuffComboMidasStartCount:OnChanged(function()
+    if not (Toggles.ToggleBuffCombo and Toggles.ToggleBuffCombo.Value) then
+        Extra.BuffComboMidasCount = math.clamp(math.floor(getNumberOption("BuffComboMidasStartCount", 0)), 0, 9)
+        Extra.setBuffComboStatus("Combo count set to " .. tostring(Extra.BuffComboMidasCount) .. ".")
     end
 end)
 function Extra.bindPerformanceHudToggle(toggleId)
@@ -4492,6 +4901,9 @@ if Toggles.ToggleAutoPotions.Value then
 end
 if Toggles.ToggleAutoTotemContact.Value then
     startAutoTotemContact()
+end
+if Toggles.ToggleBuffCombo.Value then
+    Extra.startBuffCombo()
 end
 connectAmuletEvents()
 if Toggles.ToggleAutoAmuletRoll.Value then
