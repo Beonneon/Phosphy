@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.4",
+    Version = "1.3.5",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -1644,7 +1644,23 @@ function Extra.resetAutoMidasCount(source)
     Extra.setAutoMidasStatus("Auto Midas count: " .. tostring(Extra.AutoMidasGoldCount) .. "/10.")
 end
 
+function Extra.refreshAutoMidasBoostState()
+    if isBoostActive("midasBob") ~= true then
+        return false
+    end
+
+    if Extra.AutoMidasGoldCount ~= 0 or Extra.AutoMidasGoldCountSource ~= "boost-active" then
+        Extra.resetAutoMidasCount("boost-active")
+        Extra.setAutoMidasStatus("Midas boost active. Auto Midas count forced to 0/10.")
+    end
+    return true
+end
+
 function Extra.noteMidasGoldCollected(source)
+    if Extra.refreshAutoMidasBoostState() then
+        return 0
+    end
+
     Extra.AutoMidasGoldCount = math.clamp(Extra.AutoMidasGoldCount + 1, 0, 10)
     Extra.AutoMidasGoldCountSource = source or "observed"
     Extra.setAutoMidasStatus("Collected Midas bar: "
@@ -1653,6 +1669,10 @@ function Extra.noteMidasGoldCollected(source)
 end
 
 function Extra.collectAutoMidasGoldBar(id, position)
+    if Extra.refreshAutoMidasBoostState() then
+        return false
+    end
+
     if Toggles.ToggleAutoMidasHoldAt9 and Toggles.ToggleAutoMidasHoldAt9.Value
         and Extra.AutoMidasGoldCount >= 9 then
         Extra.AutoMidasHeldGoldBar = {
@@ -3094,9 +3114,9 @@ function Extra.updateBuffComboInfo()
 
     local midasCount = Extra.AutoMidasGoldCount or 0
     local midasSource = tostring(Extra.AutoMidasGoldCountSource or "event")
-    if isBoostActive("midasBob") == true then
-        midasCount = 10
-        midasSource = "midas boost active"
+    if Extra.refreshAutoMidasBoostState() then
+        midasCount = 0
+        midasSource = "boost-active"
     end
 
     local totemReady, totemId = Extra.hasKnownTotem()
@@ -3225,6 +3245,11 @@ function Extra.handleBuffComboGoldBar(id, position)
         return false
     end
 
+    if Extra.refreshAutoMidasBoostState() then
+        Extra.setBuffComboStatus("Midas boost is active; combo count held at 0/10.")
+        return true
+    end
+
     local holdCount = Extra.getBuffComboHoldCount()
     local key = tostring(id)
 
@@ -3349,7 +3374,9 @@ function Extra.startBuffCombo()
 
     Tasks.BuffCombo = task.spawn(function()
         while Extra.buffComboEnabled() do
-            if Extra.AutoMidasGoldCount >= Extra.getBuffComboHoldCount() then
+            if Extra.refreshAutoMidasBoostState() then
+                Extra.setBuffComboStatus("Midas boost is active; waiting with count at 0/10.")
+            elseif Extra.AutoMidasGoldCount >= Extra.getBuffComboHoldCount() then
                 Extra.finishBuffCombo()
             else
                 Extra.setBuffComboStatus("Collecting Midas bars until "
