@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.3",
+    Version = "1.3.4",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -81,18 +81,14 @@ local Extra = {
     SpawnIdQueue = {},
     SpawnIdQueued = {},
     AutoMidasGoldCount = 0,
-    AutoMidasGoldCountSource = "manual",
+    AutoMidasGoldCountSource = "session",
     AutoMidasHeldGoldBar = nil,
-    BuffComboMidasCount = 0,
-    BuffComboMidasCountSource = "fallback/manual",
     BuffComboHeldGoldBar = nil,
     BuffComboLastCrateClaimAt = 0,
     BuffComboRunning = false,
     BuffComboFreshTotemId = nil,
     BuffComboFreshTotemExpiresAt = 0,
     BuffComboIgnoredTotems = {},
-    BuffComboAwaitingMidasServerUpdate = false,
-    BuffComboAwaitingMidasPrevious = nil,
     StardustReadyPrinted = false,
 }
 local ReadyActionLastFiredAt = {}
@@ -1640,11 +1636,20 @@ function Extra.setAutoMidasStatus(message)
     end
 end
 
-function Extra.resetAutoMidasCount()
-    Extra.AutoMidasGoldCount = math.clamp(math.floor(getNumberOption("AutoMidasGoldStartCount", 0)), 0, 9)
-    Extra.AutoMidasGoldCountSource = "manual"
+function Extra.resetAutoMidasCount(source)
+    Extra.AutoMidasGoldCount = 0
+    Extra.AutoMidasGoldCountSource = source or "reset"
     Extra.AutoMidasHeldGoldBar = nil
+    Extra.BuffComboHeldGoldBar = nil
     Extra.setAutoMidasStatus("Auto Midas count: " .. tostring(Extra.AutoMidasGoldCount) .. "/10.")
+end
+
+function Extra.noteMidasGoldCollected(source)
+    Extra.AutoMidasGoldCount = math.clamp(Extra.AutoMidasGoldCount + 1, 0, 10)
+    Extra.AutoMidasGoldCountSource = source or "observed"
+    Extra.setAutoMidasStatus("Collected Midas bar: "
+        .. tostring(Extra.AutoMidasGoldCount) .. "/10.")
+    return Extra.AutoMidasGoldCount
 end
 
 function Extra.collectAutoMidasGoldBar(id, position)
@@ -1661,11 +1666,8 @@ function Extra.collectAutoMidasGoldBar(id, position)
 
     task.spawn(function()
         if collectMidasGoldBar(id, position) then
-            Extra.AutoMidasGoldCount = math.clamp(Extra.AutoMidasGoldCount + 1, 0, 10)
-            Extra.AutoMidasGoldCountSource = "observed"
             Extra.AutoMidasHeldGoldBar = nil
-            Extra.setAutoMidasStatus("Collected Midas bar: "
-                .. tostring(Extra.AutoMidasGoldCount) .. "/10.")
+            Extra.noteMidasGoldCollected("observed")
         end
     end)
     return true
@@ -1708,9 +1710,7 @@ local function connectMidasGoldEvents()
     if boostActivated and not Connections.MidasBoostActivated then
         Connections.MidasBoostActivated = boostActivated.OnClientEvent:Connect(function(boostId, expiresAt)
             if boostId == "midasBob" and typeof(expiresAt) == "number" and expiresAt > os.time() then
-                Extra.AutoMidasGoldCount = 0
-                Extra.AutoMidasGoldCountSource = "boost-reset"
-                Extra.AutoMidasHeldGoldBar = nil
+                Extra.resetAutoMidasCount("boost-reset")
                 Extra.setAutoMidasStatus("Midas boost activated. Auto Midas count reset to 0/10.")
             end
         end)
@@ -2619,8 +2619,8 @@ end
 function Extra.setBuffComboStatus(message)
     local text = tostring(message)
     Marker:SetAttribute("BuffComboStatus", text)
-    Marker:SetAttribute("BuffComboMidasCount", Extra.BuffComboMidasCount)
-    Marker:SetAttribute("BuffComboMidasCountSource", Extra.BuffComboMidasCountSource or "fallback")
+    Marker:SetAttribute("BuffComboMidasCount", Extra.AutoMidasGoldCount)
+    Marker:SetAttribute("BuffComboMidasCountSource", Extra.AutoMidasGoldCountSource or "event")
     Marker:SetAttribute("BuffComboHasHeldGoldBar", Extra.BuffComboHeldGoldBar ~= nil)
 
     if Extra.BuffComboStatusLabel then
@@ -2851,61 +2851,6 @@ function Extra.handleBuffComboTotemSpawn(id, position, duration)
     end
 end
 
-function Extra.profileMidasCount()
-    local profile = getProfileData()
-    if typeof(profile) ~= "table" then
-        return nil
-    end
-
-    local candidates = {
-        "midasBobBars",
-        "midasBobGoldBars",
-        "midasGoldBars",
-        "goldBars",
-        "midasBars",
-    }
-
-    for _, key in ipairs(candidates) do
-        local value = tonumber(profile[key])
-        if value and value >= 0 and value <= 10 then
-            return math.floor(value), key
-        end
-    end
-
-    local followerState = profile.followerState or profile.followers or profile.midasBob
-    if typeof(followerState) == "table" then
-        for _, key in ipairs(candidates) do
-            local value = tonumber(followerState[key])
-            if value and value >= 0 and value <= 10 then
-                return math.floor(value), "nested." .. key
-            end
-        end
-    end
-
-    return nil
-end
-
-function Extra.syncBuffComboMidasCount()
-    if Toggles.ToggleBuffComboAutoTrackMidas and Toggles.ToggleBuffComboAutoTrackMidas.Value then
-        local profileCount, source = Extra.profileMidasCount()
-        if profileCount then
-            local nextCount = math.clamp(math.floor(profileCount), 0, 10)
-            if Extra.BuffComboAwaitingMidasServerUpdate
-                and nextCount ~= Extra.BuffComboAwaitingMidasPrevious then
-                Extra.BuffComboAwaitingMidasServerUpdate = false
-                Extra.BuffComboAwaitingMidasPrevious = nil
-            end
-
-            Extra.BuffComboMidasCount = nextCount
-            Extra.BuffComboMidasCountSource = "profile:" .. tostring(source)
-            Marker:SetAttribute("BuffComboMidasCountSource", Extra.BuffComboMidasCountSource)
-            return true
-        end
-    end
-
-    return false
-end
-
 function Extra.boostActiveText(boostIds, positiveValue)
     if typeof(boostIds) == "string" then
         boostIds = { boostIds }
@@ -3117,15 +3062,14 @@ end
 function Extra.printBuffComboDebug()
     ensureBoostState()
 
-    local midasCount, midasSource = Extra.profileMidasCount()
     local crateReady, crateStatus, crateAlreadyBoosted, crateClaimable = Extra.getCrateReadiness()
     local totemReady, totemId = Extra.hasKnownTotem()
     local lines = {
         "[slimeinc debug] Buff combo state",
         "version=" .. tostring(Extra.Version),
         "midasBoost=" .. tostring(isBoostActive("midasBob")),
-        "midasProfileCount=" .. tostring(midasCount) .. " source=" .. tostring(midasSource),
-        "midasFallbackCount=" .. tostring(Extra.BuffComboMidasCount),
+        "midasEventCount=" .. tostring(Extra.AutoMidasGoldCount)
+            .. " source=" .. tostring(Extra.AutoMidasGoldCountSource),
         "heldGoldBar=" .. Extra.compactDebugValue(Extra.BuffComboHeldGoldBar, 0),
         "totemReady=" .. tostring(totemReady) .. " id=" .. tostring(totemId),
         "totemBoost=" .. tostring(Extra.getTotemBoostActive()),
@@ -3148,13 +3092,8 @@ function Extra.updateBuffComboInfo()
         return
     end
 
-    local profileMidasCount, profileMidasSource = Extra.profileMidasCount()
-    local useProfileMidas = Toggles.ToggleBuffComboAutoTrackMidas
-        and Toggles.ToggleBuffComboAutoTrackMidas.Value
-        and profileMidasCount ~= nil
-    local midasCount = useProfileMidas and profileMidasCount or Extra.BuffComboMidasCount or 0
-    local midasSource = useProfileMidas and ("profile:" .. tostring(profileMidasSource))
-        or tostring(Extra.BuffComboMidasCountSource or "manual/observed")
+    local midasCount = Extra.AutoMidasGoldCount or 0
+    local midasSource = tostring(Extra.AutoMidasGoldCountSource or "event")
     if isBoostActive("midasBob") == true then
         midasCount = 10
         midasSource = "midas boost active"
@@ -3288,39 +3227,13 @@ function Extra.handleBuffComboGoldBar(id, position)
 
     local holdCount = Extra.getBuffComboHoldCount()
     local key = tostring(id)
-    local hasServerCount = Extra.syncBuffComboMidasCount()
 
-    if Extra.BuffComboMidasCount < holdCount then
-        if not hasServerCount then
-            task.spawn(function()
-                local previousCount = Extra.BuffComboMidasCount
-                if collectMidasGoldBar(id, position) then
-                    Extra.BuffComboMidasCount = math.clamp(previousCount + 1, 0, 10)
-                    Extra.BuffComboMidasCountSource = "observed:fallback"
-                    Extra.BuffComboAwaitingMidasServerUpdate = false
-                    Extra.BuffComboAwaitingMidasPrevious = nil
-                    Marker:SetAttribute("BuffComboMidasCount", Extra.BuffComboMidasCount)
-                    Marker:SetAttribute("BuffComboMidasCountSource", Extra.BuffComboMidasCountSource)
-                    Extra.setBuffComboStatus("Collected Midas bar. Local combo count: "
-                        .. tostring(Extra.BuffComboMidasCount) .. "/" .. tostring(holdCount) .. ".")
-                end
-            end)
-            return true
-        end
-
-        if Extra.BuffComboAwaitingMidasServerUpdate then
-            Extra.setBuffComboStatus("Waiting for server Midas count update. Current: "
-                .. tostring(Extra.BuffComboMidasCount) .. "/" .. tostring(holdCount) .. ".")
-            return true
-        end
-
+    if Extra.AutoMidasGoldCount < holdCount then
         task.spawn(function()
-            local previousCount = Extra.BuffComboMidasCount
             if collectMidasGoldBar(id, position) then
-                Extra.BuffComboAwaitingMidasServerUpdate = true
-                Extra.BuffComboAwaitingMidasPrevious = previousCount
-                Extra.setBuffComboStatus("Collected Midas bar; waiting for server count to move past "
-                    .. tostring(previousCount) .. ".")
+                local count = Extra.noteMidasGoldCollected("combo")
+                Extra.setBuffComboStatus("Collected Midas bar. Combo count: "
+                    .. tostring(count) .. "/" .. tostring(holdCount) .. ".")
             end
         end)
         return true
@@ -3337,8 +3250,6 @@ function Extra.handleBuffComboGoldBar(id, position)
 end
 
 function Extra.finishBuffCombo()
-    Extra.syncBuffComboMidasCount()
-
     local held = Extra.BuffComboHeldGoldBar
     if not held then
         Extra.setBuffComboStatus("Waiting for the final Midas bar to spawn.")
@@ -3404,8 +3315,7 @@ function Extra.finishBuffCombo()
     Extra.setBuffComboStatus("Collecting final Midas bar for x5 buff...")
     if collectMidasGoldBar(held.id, held.position) then
         Extra.BuffComboHeldGoldBar = nil
-        Extra.BuffComboMidasCount = Extra.getBuffComboHoldCount() + 1
-        Extra.BuffComboMidasCountSource = "observed:combo-fired"
+        Extra.noteMidasGoldCollected("combo-fired")
         Extra.setBuffComboStatus("Combo fired: crate + totem + potion + Midas.")
         task.defer(function()
             if Toggles.ToggleBuffCombo then
@@ -3424,14 +3334,9 @@ function Extra.startBuffCombo()
     connectMidasGoldEvents()
     connectTotemEvents()
 
-    Extra.BuffComboMidasCount = math.clamp(math.floor(getNumberOption("BuffComboMidasStartCount", 0)), 0, 9)
-    Extra.BuffComboMidasCountSource = "fallback/manual"
-    Extra.syncBuffComboMidasCount()
     Extra.BuffComboHeldGoldBar = nil
     Extra.BuffComboTotemAlreadyActive = false
     Extra.BuffComboReadyTotemId = nil
-    Extra.BuffComboAwaitingMidasServerUpdate = false
-    Extra.BuffComboAwaitingMidasPrevious = nil
     Extra.BuffComboFreshTotemId = nil
     Extra.BuffComboFreshTotemExpiresAt = 0
     Extra.BuffComboIgnoredTotems = {}
@@ -3439,19 +3344,18 @@ function Extra.startBuffCombo()
         Extra.BuffComboIgnoredTotems[tostring(id)] = true
     end
     Extra.BuffComboRunning = true
-    Extra.setBuffComboStatus("Buff combo armed. Midas count " .. tostring(Extra.BuffComboMidasCount) .. "/"
+    Extra.setBuffComboStatus("Buff combo armed. Midas count " .. tostring(Extra.AutoMidasGoldCount) .. "/"
         .. tostring(Extra.getBuffComboHoldCount()) .. ".")
 
     Tasks.BuffCombo = task.spawn(function()
         while Extra.buffComboEnabled() do
-            Extra.syncBuffComboMidasCount()
-            if Extra.BuffComboMidasCount >= Extra.getBuffComboHoldCount() then
+            if Extra.AutoMidasGoldCount >= Extra.getBuffComboHoldCount() then
                 Extra.finishBuffCombo()
             else
                 Extra.setBuffComboStatus("Collecting Midas bars until "
                     .. tostring(Extra.getBuffComboHoldCount()) .. ". Current: "
-                    .. tostring(Extra.BuffComboMidasCount) .. " from "
-                    .. tostring(Extra.BuffComboMidasCountSource or "fallback") .. ".")
+                    .. tostring(Extra.AutoMidasGoldCount) .. " from "
+                    .. tostring(Extra.AutoMidasGoldCountSource or "event") .. ".")
             end
 
             task.wait(1)
@@ -5179,22 +5083,9 @@ MidasBox:AddCheckbox("ToggleAutoMidasGold", {
     Text = "Auto Golden Ingot",
     Default = true,
 })
-MidasBox:AddSlider("AutoMidasGoldStartCount", {
-    Text = "Start Count",
-    Min = 0,
-    Max = 9,
-    Default = 0,
-    Rounding = 0,
-})
 MidasBox:AddCheckbox("ToggleAutoMidasHoldAt9", {
     Text = "Hold At 9/10",
     Default = false,
-})
-MidasBox:AddButton({
-    Text = "Reset Midas Count",
-    Func = function()
-        Extra.resetAutoMidasCount()
-    end,
 })
 MidasBox:AddButton({
     Text = "Collect Held Bar",
@@ -5218,13 +5109,6 @@ BuffComboBox:AddDropdown("BuffComboPotion", {
     AllowNull = true,
     Default = { "Godly Potion", "Rainbow Potion" },
 })
-BuffComboBox:AddSlider("BuffComboMidasStartCount", {
-    Text = "Fallback Midas Count",
-    Min = 0,
-    Max = 9,
-    Default = 0,
-    Rounding = 0,
-})
 BuffComboBox:AddSlider("BuffComboHoldMidasCount", {
     Text = "Hold At Midas Count",
     Min = 1,
@@ -5235,10 +5119,6 @@ BuffComboBox:AddSlider("BuffComboHoldMidasCount", {
 BuffComboBox:AddCheckbox("ToggleBuffComboBuyPotion", {
     Text = "Buy Potion If Missing",
     Default = true,
-})
-BuffComboBox:AddCheckbox("ToggleBuffComboAutoTrackMidas", {
-    Text = "Sync Profile Midas",
-    Default = false,
 })
 BuffComboBox:AddCheckbox("ToggleBuffComboRequireTotem", {
     Text = "Require Totem",
@@ -5255,17 +5135,6 @@ BuffComboBox:AddCheckbox("ToggleBuffComboTrustClientCrate", {
 BuffComboBox:AddCheckbox("ToggleBuffCombo", {
     Text = "Run One Buff Combo",
     Default = false,
-})
-BuffComboBox:AddButton({
-    Text = "Reset Combo Count",
-    Func = function()
-        Extra.BuffComboMidasCount = math.clamp(math.floor(getNumberOption("BuffComboMidasStartCount", 0)), 0, 9)
-        Extra.BuffComboMidasCountSource = "fallback/manual"
-        Extra.BuffComboAwaitingMidasServerUpdate = false
-        Extra.BuffComboAwaitingMidasPrevious = nil
-        Extra.BuffComboHeldGoldBar = nil
-        Extra.setBuffComboStatus("Combo count reset to " .. tostring(Extra.BuffComboMidasCount) .. ".")
-    end,
 })
 BuffComboBox:AddButton({
     Text = "Print Bob/Crate Debug",
@@ -5545,24 +5414,6 @@ Options.PlayerSpeed:OnChanged(function()
         applyPlayerSpeed()
     end
 end)
-Options.AutoMidasGoldStartCount:OnChanged(function()
-    if Extra.AutoMidasGoldCountSource == "manual"
-        or Extra.AutoMidasGoldCountSource == "boost-reset" then
-        Extra.resetAutoMidasCount()
-    end
-end)
-Options.BuffComboMidasStartCount:OnChanged(function()
-    if not (Toggles.ToggleBuffCombo and Toggles.ToggleBuffCombo.Value)
-        or Extra.BuffComboMidasCountSource == "fallback"
-        or Extra.BuffComboMidasCountSource == "fallback/manual" then
-        Extra.BuffComboMidasCount = math.clamp(math.floor(getNumberOption("BuffComboMidasStartCount", 0)), 0, 9)
-        Extra.BuffComboMidasCountSource = "fallback/manual"
-        Extra.BuffComboAwaitingMidasServerUpdate = false
-        Extra.BuffComboAwaitingMidasPrevious = nil
-        Extra.setBuffComboStatus("Combo count set to " .. tostring(Extra.BuffComboMidasCount) .. ".")
-        Extra.updateBuffComboInfo()
-    end
-end)
 Options.BuffComboPotion:OnChanged(function()
     Extra.updateBuffComboInfo()
 end)
@@ -5677,7 +5528,7 @@ startRingVisual()
 startMovementCoordinator()
 connectMidasGoldEvents()
 enableFastAmulets()
-Extra.resetAutoMidasCount()
+Extra.resetAutoMidasCount("session")
 if Toggles.ToggleHugeCollector.Value then
     startCollector()
 end
