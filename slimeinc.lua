@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.5",
+    Version = "1.3.6",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -89,6 +89,7 @@ local Extra = {
     BuffComboFreshTotemId = nil,
     BuffComboFreshTotemExpiresAt = 0,
     BuffComboIgnoredTotems = {},
+    StardustMachineRequestCooldown = 60,
     StardustReadyPrinted = false,
 }
 local ReadyActionLastFiredAt = {}
@@ -1454,8 +1455,25 @@ local function isStardustMachineReady()
     return true
 end
 
+function Extra.getStardustRequestThrottleRemaining()
+    local lastRequest = tonumber(Marker:GetAttribute("StardustMachineLastRequestAt")
+        or Marker:GetAttribute("StardustMachineLastRequest")) or 0
+    local remaining = Extra.StardustMachineRequestCooldown - (Workspace:GetServerTimeNow() - lastRequest)
+    return math.max(0, remaining)
+end
+
 local function requestFallingStarBoost()
-    if not isStardustMachineReady() or not canFireReadyAction("StardustMachine", 3) then
+    if not isStardustMachineReady() then
+        return false
+    end
+
+    local throttleRemaining = Extra.getStardustRequestThrottleRemaining()
+    Marker:SetAttribute("StardustMachineClientThrottleRemaining", math.ceil(throttleRemaining))
+    if throttleRemaining > 0 then
+        return false
+    end
+
+    if not canFireReadyAction("StardustMachine", Extra.StardustMachineRequestCooldown) then
         return false
     end
 
@@ -1466,7 +1484,10 @@ local function requestFallingStarBoost()
     end
 
     remote:FireServer()
-    Marker:SetAttribute("StardustMachineLastRequest", Workspace:GetServerTimeNow())
+    local requestTime = Workspace:GetServerTimeNow()
+    Marker:SetAttribute("StardustMachineLastRequest", requestTime)
+    Marker:SetAttribute("StardustMachineLastRequestAt", requestTime)
+    Marker:SetAttribute("StardustMachineClientThrottleRemaining", Extra.StardustMachineRequestCooldown)
     return true
 end
 
@@ -1525,8 +1546,9 @@ local function startFallingStarAutomation()
     startFallingStarListeners()
 
     Tasks.FallingStars = task.spawn(function()
-        while (Toggles.ToggleAutoFallingStars and Toggles.ToggleAutoFallingStars.Value)
-            or (Toggles.ToggleAutoCollectFallingStars and Toggles.ToggleAutoCollectFallingStars.Value) do
+        while Marker:GetAttribute("Session") == Session
+            and ((Toggles.ToggleAutoFallingStars and Toggles.ToggleAutoFallingStars.Value)
+            or (Toggles.ToggleAutoCollectFallingStars and Toggles.ToggleAutoCollectFallingStars.Value)) do
             if Toggles.ToggleAutoFallingStars and Toggles.ToggleAutoFallingStars.Value then
                 requestFallingStarBoost()
             end
