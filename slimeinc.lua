@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.9",
+    Version = "1.3.10",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -3884,6 +3884,10 @@ local function enableFastAmulets()
 end
 
 pickLatestAmulet = function(choice, quiet)
+    if Marker:GetAttribute("Session") ~= Session then
+        return false
+    end
+
     enableFastAmulets()
     local remote = getRemote("PickAmulet", 10)
     if not remote then
@@ -3944,6 +3948,11 @@ local function connectAmuletEvents()
 
     if not Connections.AmuletRollResult then
         Connections.AmuletRollResult = rollResult.OnClientEvent:Connect(function(options, rollId)
+            if Marker:GetAttribute("Session") ~= Session then
+                disconnect("AmuletRollResult")
+                return
+            end
+
             AmuletRollPending = false
             AmuletChoicePending = true
             AmuletPickPending = false
@@ -3978,6 +3987,11 @@ local function connectAmuletEvents()
     local pickResult = getRemote("AmuletPickResult", 2)
     if pickResult and not Connections.AmuletPickResult then
         Connections.AmuletPickResult = pickResult.OnClientEvent:Connect(function(choice, rollId, ok, message)
+            if Marker:GetAttribute("Session") ~= Session then
+                disconnect("AmuletPickResult")
+                return
+            end
+
             if rollId == LatestAmuletRollId then
                 AmuletPickPending = false
                 if ok == true then
