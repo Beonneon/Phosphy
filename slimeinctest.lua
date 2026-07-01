@@ -1595,10 +1595,7 @@ local function collectMidasGoldBar(id, position)
     end
 
     local targetPosition = payloadToPosition(position)
-    local allowTeleport = Toggles.ToggleMidasTeleportFallback and Toggles.ToggleMidasTeleportFallback.Value
-    if targetPosition and not allowTeleport then
-        Extra.touchMidasGoldBar(targetPosition)
-    elseif targetPosition then
+    if targetPosition then
         MidasMovePosition = targetPosition
         MidasMoveUntil = os.clock() + 5
 
@@ -3536,6 +3533,58 @@ function Extra.stopBuffCombo()
 end
 
 local AmuletCountValues = { "1", "2", "3", "4" }
+Extra.AmuletTypeValues = {
+    "Void",
+    "Titanic",
+    "Summoner",
+    "Hasty",
+    "Lucky",
+    "Godly",
+    "Gift",
+    "Corrupted",
+    "Stardust",
+    "Slimes",
+    "Exp",
+    "Gems",
+    "Move Speed",
+    "Giant",
+    "Corrupt Chance",
+    "404",
+}
+Extra.AmuletTypeAliases = {
+    void = "VoidAmulet",
+    voidamulet = "VoidAmulet",
+    titanic = "TitanicAmulet",
+    titanicamulet = "TitanicAmulet",
+    summoner = "SummonerAmulet",
+    summoneramulet = "SummonerAmulet",
+    hasty = "HastyAmulet",
+    hastyamulet = "HastyAmulet",
+    lucky = "LuckyAmulet",
+    luckyamulet = "LuckyAmulet",
+    godly = "GodlyAmulet",
+    godlyamulet = "GodlyAmulet",
+    gift = "GiftAmulet",
+    giftamulet = "GiftAmulet",
+    corrupted = "CorruptedAmulet",
+    corruptedamulet = "CorruptedAmulet",
+    stardust = "StardustAmulet",
+    stardustamulet = "StardustAmulet",
+    slimes = "SlimesAmulet",
+    slimesamulet = "SlimesAmulet",
+    exp = "ExpAmulet",
+    expamulet = "ExpAmulet",
+    gems = "GemsAmulet",
+    gemsamulet = "GemsAmulet",
+    movespeed = "MoveSpeedAmulet",
+    movespeedamulet = "MoveSpeedAmulet",
+    giant = "GiantAmulet",
+    giantamulet = "GiantAmulet",
+    corruptchance = "CorruptChanceAmulet",
+    corruptchanceamulet = "CorruptChanceAmulet",
+    ["404"] = "Amulet404",
+    amulet404 = "Amulet404",
+}
 
 local AmuletPreferredFields = {
     "rarity",
@@ -3598,6 +3647,50 @@ end
 
 local function isSelectedAmuletCount(count)
     return getSelectedAmuletCounts()[tostring(count)] == true
+end
+
+function Extra.normalizeAmuletTypeName(value)
+    if value == nil then
+        return nil
+    end
+
+    local compact = tostring(value):lower():gsub("%s+", ""):gsub("[^%w]", "")
+    return Extra.AmuletTypeAliases[compact] or Extra.AmuletTypeAliases[compact:gsub("amulet$", "")]
+end
+
+function Extra.getSelectedAmuletTypes()
+    local dropdown = Options.AmuletRequiredTypes
+    if not dropdown or typeof(dropdown.Value) ~= "table" then
+        return {}
+    end
+
+    local selected = {}
+    for value, active in pairs(dropdown.Value) do
+        if active then
+            local amuletType = Extra.normalizeAmuletTypeName(value)
+            if amuletType then
+                selected[amuletType] = true
+            end
+        end
+    end
+
+    return selected
+end
+
+function Extra.hasSelectedAmuletTypes()
+    for _, active in pairs(Extra.getSelectedAmuletTypes()) do
+        if active then
+            return true
+        end
+    end
+
+    return false
+end
+
+function Extra.shouldRequireSelectedAmuletType()
+    return Toggles.ToggleRequireAmuletType
+        and Toggles.ToggleRequireAmuletType.Value
+        and Extra.hasSelectedAmuletTypes()
 end
 
 local function compactAmuletValue(value)
@@ -3670,6 +3763,15 @@ local function getAmuletType(option)
     end
 
     return nil
+end
+
+function Extra.optionMatchesSelectedAmuletType(option)
+    local amuletType = Extra.normalizeAmuletTypeName(getAmuletType(option))
+    if not amuletType then
+        return false
+    end
+
+    return Extra.getSelectedAmuletTypes()[amuletType] == true
 end
 
 local function summarizeAmuletOption(option, index, matched)
@@ -3750,18 +3852,31 @@ local function getOrderedAmuletOptionKeys(options)
 end
 
 local function findSelectedAmuletTarget(options)
-    local count = #getOrderedAmuletOptionKeys(options)
+    local keys = getOrderedAmuletOptionKeys(options)
+    local count = #keys
     if isSelectedAmuletCount(count) then
+        if Extra.shouldRequireSelectedAmuletType() then
+            for _, key in ipairs(keys) do
+                if Extra.optionMatchesSelectedAmuletType(options[key]) then
+                    return count, key
+                end
+            end
+
+            return nil, nil, "type"
+        end
+
         return count, nil
     end
 
     return nil, nil
 end
 
-local function summarizeAmuletRoll(options, rollId, target, targetIndex)
+local function summarizeAmuletRoll(options, rollId, target, targetIndex, missReason)
     local lines = {}
     if target then
         lines[#lines + 1] = "Roll " .. tostring(rollId or "?") .. " hit selected count: " .. tostring(target) .. " option(s)."
+    elseif missReason == "type" then
+        lines[#lines + 1] = "Roll " .. tostring(rollId or "?") .. " hit selected count, but missed required amulet type."
     else
         lines[#lines + 1] = "Roll " .. tostring(rollId or "?") .. " did not hit a selected option count."
     end
@@ -3879,11 +3994,11 @@ local function connectAmuletEvents()
             AmuletPickPending = false
             LatestAmuletRollId = rollId
 
-            local target, targetIndex = findSelectedAmuletTarget(options)
+            local target, targetIndex, missReason = findSelectedAmuletTarget(options)
             LatestAmuletTarget = target
             LatestAmuletTargetIndex = targetIndex
             Extra.AmuletTargetLocked = target ~= nil
-            setAmuletStatus(summarizeAmuletRoll(options, rollId, target, targetIndex))
+            setAmuletStatus(summarizeAmuletRoll(options, rollId, target, targetIndex, missReason))
 
             Marker:SetAttribute("AmuletLastRollId", tostring(rollId))
             Marker:SetAttribute("AmuletLastTarget", target or "")
@@ -3976,6 +4091,14 @@ local function startAutoAmuletRoll()
         if Toggles.ToggleAutoAmuletRoll then
             Toggles.ToggleAutoAmuletRoll:SetValue(false)
         end
+        return
+    end
+
+    if Toggles.ToggleRequireAmuletType
+        and Toggles.ToggleRequireAmuletType.Value
+        and not Extra.hasSelectedAmuletTypes() then
+        notify("Select at least one required amulet type first.")
+        Toggles.ToggleAutoAmuletRoll:SetValue(false)
         return
     end
 
@@ -5156,6 +5279,17 @@ AmuletBox:AddDropdown("AmuletOptionCounts", {
     AllowNull = true,
     Default = { "4" },
 })
+AmuletBox:AddDropdown("AmuletRequiredTypes", {
+    Text = "Required Amulet Type",
+    Values = Extra.AmuletTypeValues,
+    Multi = true,
+    AllowNull = true,
+    Default = {},
+})
+AmuletBox:AddCheckbox("ToggleRequireAmuletType", {
+    Text = "Require Type On Count Hit",
+    Default = false,
+})
 AmuletBox:AddSlider("AutoAmuletRollDelayMs", {
     Text = "Roll Delay",
     Min = 0,
@@ -5286,10 +5420,6 @@ MidasBox:AddCheckbox("ToggleAutoMidasGold", {
 })
 MidasBox:AddCheckbox("ToggleAutoMidasHoldAt9", {
     Text = "Hold At 9/10",
-    Default = false,
-})
-MidasBox:AddCheckbox("ToggleMidasTeleportFallback", {
-    Text = "Teleport Fallback",
     Default = false,
 })
 MidasBox:AddButton({
