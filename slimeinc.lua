@@ -68,13 +68,12 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.8",
+    Version = "1.3.9",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
     BlessingActionTimeout = 0.45,
-    BlessingFailureRetrySeconds = 1.5,
-    BlessingLoopDelay = 0.12,
+    BlessingFailureRetrySeconds = 1,
     BlessingOptionFields = { "key", "name", "id", "blessing" },
     BlessingRemotes = {},
     CleanbotRollPending = false,
@@ -2313,11 +2312,6 @@ end
 
 function Extra.setBlessingStatus(message)
     local text = tostring(message)
-    if Extra.LastBlessingStatus == text then
-        return
-    end
-
-    Extra.LastBlessingStatus = text
     Marker:SetAttribute("AutoBlessingStatus", text)
     if Extra.BlessingStatusLabel then
         pcall(function()
@@ -2651,7 +2645,7 @@ function Extra.startAutoBlessing()
     Tasks.AutoBlessing = task.spawn(function()
         while Extra.autoBlessingEnabled() do
             Extra.autoBlessingStep()
-            task.wait(Extra.BlessingLoopDelay)
+            task.wait(0.03)
         end
     end)
 end
