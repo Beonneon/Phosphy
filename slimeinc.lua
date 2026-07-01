@@ -68,12 +68,13 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.7",
+    Version = "1.3.8",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
     BlessingActionTimeout = 0.45,
-    BlessingFailureRetrySeconds = 1,
+    BlessingFailureRetrySeconds = 1.5,
+    BlessingLoopDelay = 0.12,
     BlessingOptionFields = { "key", "name", "id", "blessing" },
     BlessingRemotes = {},
     CleanbotRollPending = false,
@@ -89,6 +90,10 @@ local Extra = {
     BuffComboFreshTotemId = nil,
     BuffComboFreshTotemExpiresAt = 0,
     BuffComboIgnoredTotems = {},
+    AmuletNextRollAt = 0,
+    AmuletPickTimeout = 0.25,
+    AmuletNextRollDelay = 0.12,
+    AmuletTargetLocked = false,
     StardustMachineReadyDelay = 60,
     StardustMachineRequestCooldown = 60,
     StardustReadyPrinted = false,
@@ -1625,6 +1630,44 @@ local function fireGodlyOrbClaim(count, delaySeconds)
     return count
 end
 
+function Extra.findMidasGoldBarTouchPart(position)
+    local bestPart = nil
+    local bestDistance = math.huge
+    local targetPosition = payloadToPosition(position)
+
+    for _, instance in ipairs(Workspace:GetDescendants()) do
+        if instance:IsA("BasePart") and instance.Name == "RadiusCircle" then
+            local model = instance:FindFirstAncestorWhichIsA("Model")
+            if model and model:GetAttribute("ClientMidasGoldBarVisual") == true then
+                local distance = targetPosition and (instance.Position - targetPosition).Magnitude or 0
+                if distance < bestDistance then
+                    bestPart = instance
+                    bestDistance = distance
+                end
+            end
+        end
+    end
+
+    if bestPart and (not targetPosition or bestDistance <= 25) then
+        return bestPart
+    end
+    return nil
+end
+
+function Extra.touchMidasGoldBar(position)
+    local root = getRoot()
+    local part = Extra.findMidasGoldBarTouchPart(position)
+    if not (root and part and typeof(firetouchinterest) == "function") then
+        return false
+    end
+
+    pcall(firetouchinterest, root, part, 0)
+    task.wait(0.05)
+    pcall(firetouchinterest, root, part, 1)
+    Marker:SetAttribute("MidasLastTouchPart", part:GetFullName())
+    return true
+end
+
 local function collectMidasGoldBar(id, position)
     if typeof(id) ~= "string" and typeof(id) ~= "number" then
         return false
@@ -1643,7 +1686,10 @@ local function collectMidasGoldBar(id, position)
     end
 
     local targetPosition = payloadToPosition(position)
-    if targetPosition then
+    local allowTeleport = Toggles.ToggleMidasTeleportFallback and Toggles.ToggleMidasTeleportFallback.Value
+    if targetPosition and not allowTeleport then
+        Extra.touchMidasGoldBar(targetPosition)
+    elseif targetPosition then
         MidasMovePosition = targetPosition
         MidasMoveUntil = os.clock() + 5
 
@@ -2267,6 +2313,11 @@ end
 
 function Extra.setBlessingStatus(message)
     local text = tostring(message)
+    if Extra.LastBlessingStatus == text then
+        return
+    end
+
+    Extra.LastBlessingStatus = text
     Marker:SetAttribute("AutoBlessingStatus", text)
     if Extra.BlessingStatusLabel then
         pcall(function()
@@ -2600,7 +2651,7 @@ function Extra.startAutoBlessing()
     Tasks.AutoBlessing = task.spawn(function()
         while Extra.autoBlessingEnabled() do
             Extra.autoBlessingStep()
-            task.wait(0.03)
+            task.wait(Extra.BlessingLoopDelay)
         end
     end)
 end
@@ -2949,9 +3000,40 @@ function Extra.getTotemBoostActive()
     return BoostStateReady and false or nil
 end
 
+function Extra.workspaceTotemExists()
+    local totem = Workspace:FindFirstChild("Totem")
+    return totem ~= nil, totem
+end
+
+function Extra.touchWorkspaceTotem()
+    local _, totem = Extra.workspaceTotemExists()
+    local root = getRoot()
+    if not (totem and root and typeof(firetouchinterest) == "function") then
+        return false
+    end
+
+    local hitbox = totem:FindFirstChild("TotemHitbox", true) or totem:FindFirstChild("TotemArea", true)
+    if not (hitbox and hitbox:IsA("BasePart")) then
+        return false
+    end
+
+    pcall(firetouchinterest, root, hitbox, 0)
+    task.wait(0.05)
+    pcall(firetouchinterest, root, hitbox, 1)
+    return true
+end
+
 function Extra.hasKnownTotem()
     if Extra.getTotemBoostActive() == true then
         return true, "active"
+    end
+
+    local hasWorkspaceTotem = Extra.workspaceTotemExists()
+    if hasWorkspaceTotem then
+        for id in pairs(TotemIds) do
+            return true, id
+        end
+        return true, "workspace"
     end
 
     if Toggles.ToggleBuffComboFreshTotem and Toggles.ToggleBuffComboFreshTotem.Value then
@@ -3457,7 +3539,11 @@ function Extra.finishBuffCombo()
         and not Extra.BuffComboTotemAlreadyActive then
         local claimed = 0
         if Extra.BuffComboReadyTotemId and Extra.BuffComboReadyTotemId ~= "active" then
-            claimed = claimTotemId(Extra.BuffComboReadyTotemId, true) and 1 or 0
+            if Extra.BuffComboReadyTotemId == "workspace" then
+                claimed = Extra.touchWorkspaceTotem() and 1 or 0
+            else
+                claimed = claimTotemId(Extra.BuffComboReadyTotemId, true) and 1 or 0
+            end
         else
             claimed = claimKnownTotems()
         end
@@ -3825,7 +3911,12 @@ pickLatestAmulet = function(choice, quiet)
         return false
     end
 
+    if quiet and choice == "OLD" and (Extra.AmuletTargetLocked or LatestAmuletTarget ~= nil) then
+        return false
+    end
+
     AmuletPickPending = true
+    local pickedRollId = LatestAmuletRollId
     remote:FireServer(choice, LatestAmuletRollId)
     Marker:SetAttribute("AmuletLastPicked", choice)
     Marker:SetAttribute("AmuletLastPickRollId", tostring(LatestAmuletRollId))
@@ -3835,8 +3926,16 @@ pickLatestAmulet = function(choice, quiet)
         notify("Amulet pick fired: " .. tostring(choice))
     end
 
-    task.delay(0.35, function()
+    task.delay(Extra.AmuletPickTimeout, function()
+        if LatestAmuletRollId ~= pickedRollId then
+            return
+        end
+
         AmuletPickPending = false
+        if choice == "OLD" and not Extra.AmuletTargetLocked and LatestAmuletTarget == nil then
+            AmuletChoicePending = false
+            Extra.AmuletNextRollAt = os.clock() + Extra.AmuletNextRollDelay
+        end
     end)
 
     return true
@@ -3859,6 +3958,7 @@ local function connectAmuletEvents()
             local target, targetIndex = findSelectedAmuletTarget(options)
             LatestAmuletTarget = target
             LatestAmuletTargetIndex = targetIndex
+            Extra.AmuletTargetLocked = target ~= nil
             setAmuletStatus(summarizeAmuletRoll(options, rollId, target, targetIndex))
 
             Marker:SetAttribute("AmuletLastRollId", tostring(rollId))
@@ -3876,11 +3976,7 @@ local function connectAmuletEvents()
             end
 
             if Toggles.ToggleAutoAmuletRoll and Toggles.ToggleAutoAmuletRoll.Value then
-                task.defer(function()
-                    if Toggles.ToggleAutoAmuletRoll and Toggles.ToggleAutoAmuletRoll.Value then
-                        pickLatestAmulet("OLD", true)
-                    end
-                end)
+                pickLatestAmulet("OLD", true)
             end
         end)
     end
@@ -3892,6 +3988,11 @@ local function connectAmuletEvents()
                 AmuletPickPending = false
                 if ok == true then
                     AmuletChoicePending = false
+                    if choice == "OLD" then
+                        Extra.AmuletNextRollAt = os.clock() + Extra.AmuletNextRollDelay
+                    end
+                else
+                    Extra.AmuletNextRollAt = os.clock() + 0.35
                 end
             end
 
@@ -3909,6 +4010,10 @@ rollAmuletOnce = function()
     connectAmuletEvents()
 
     if AmuletRollPending or AmuletChoicePending then
+        return false
+    end
+
+    if os.clock() < (Extra.AmuletNextRollAt or 0) then
         return false
     end
 
@@ -5248,6 +5353,10 @@ MidasBox:AddCheckbox("ToggleAutoMidasGold", {
 })
 MidasBox:AddCheckbox("ToggleAutoMidasHoldAt9", {
     Text = "Hold At 9/10",
+    Default = false,
+})
+MidasBox:AddCheckbox("ToggleMidasTeleportFallback", {
+    Text = "Teleport Fallback",
     Default = false,
 })
 MidasBox:AddButton({
