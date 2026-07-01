@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.6",
+    Version = "1.3.7",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -89,6 +89,7 @@ local Extra = {
     BuffComboFreshTotemId = nil,
     BuffComboFreshTotemExpiresAt = 0,
     BuffComboIgnoredTotems = {},
+    StardustMachineReadyDelay = 60,
     StardustMachineRequestCooldown = 60,
     StardustReadyPrinted = false,
 }
@@ -1423,6 +1424,9 @@ local function isStardustMachineReady()
         Extra.StardustReadyPrinted = false
         Marker:SetAttribute("StardustMachineSafeReady", "no-gui-label")
         Marker:SetAttribute("StardustMachineGuiText", "")
+        Marker:SetAttribute("StardustMachineReadyDetectedAt", 0)
+        Marker:SetAttribute("StardustMachineReadyDelayRemaining", 0)
+        Marker:SetAttribute("StardustMachineReadyConsumed", false)
         return false
     end
 
@@ -1431,6 +1435,9 @@ local function isStardustMachineReady()
     if not guiText:upper():match("^%s*READY!?%s*$") then
         Extra.StardustReadyPrinted = false
         Marker:SetAttribute("StardustMachineSafeReady", "gui-cooldown")
+        Marker:SetAttribute("StardustMachineReadyDetectedAt", 0)
+        Marker:SetAttribute("StardustMachineReadyDelayRemaining", 0)
+        Marker:SetAttribute("StardustMachineReadyConsumed", false)
         return false
     end
 
@@ -1438,18 +1445,24 @@ local function isStardustMachineReady()
     if gui and not gui.Enabled then
         Extra.StardustReadyPrinted = false
         Marker:SetAttribute("StardustMachineSafeReady", "gui-disabled")
+        Marker:SetAttribute("StardustMachineReadyDetectedAt", 0)
+        Marker:SetAttribute("StardustMachineReadyDelayRemaining", 0)
+        Marker:SetAttribute("StardustMachineReadyConsumed", false)
         return false
     end
 
     local remaining = Extra.getStardustCooldownRemaining()
     if remaining == nil or remaining > 0 then
         Extra.StardustReadyPrinted = false
+        Marker:SetAttribute("StardustMachineReadyDetectedAt", 0)
+        Marker:SetAttribute("StardustMachineReadyDelayRemaining", 0)
+        Marker:SetAttribute("StardustMachineReadyConsumed", false)
         return false
     end
 
     if not Extra.StardustReadyPrinted then
         Extra.StardustReadyPrinted = true
-        print("[slimeinc] Stardust machine GUI is READY; auto fire allowed.")
+        print("[slimeinc] Stardust machine GUI is READY; waiting before auto fire.")
     end
 
     return true
@@ -1464,6 +1477,25 @@ end
 
 local function requestFallingStarBoost()
     if not isStardustMachineReady() then
+        return false
+    end
+
+    if Marker:GetAttribute("StardustMachineReadyConsumed") == true then
+        Marker:SetAttribute("StardustMachineSafeReady", "ready-consumed")
+        return false
+    end
+
+    local now = Workspace:GetServerTimeNow()
+    local readyDetectedAt = tonumber(Marker:GetAttribute("StardustMachineReadyDetectedAt")) or 0
+    if readyDetectedAt <= 0 then
+        readyDetectedAt = now
+        Marker:SetAttribute("StardustMachineReadyDetectedAt", readyDetectedAt)
+    end
+
+    local readyDelayRemaining = Extra.StardustMachineReadyDelay - (now - readyDetectedAt)
+    Marker:SetAttribute("StardustMachineReadyDelayRemaining", math.ceil(math.max(0, readyDelayRemaining)))
+    if readyDelayRemaining > 0 then
+        Marker:SetAttribute("StardustMachineSafeReady", "ready-delay")
         return false
     end
 
@@ -1488,6 +1520,8 @@ local function requestFallingStarBoost()
     Marker:SetAttribute("StardustMachineLastRequest", requestTime)
     Marker:SetAttribute("StardustMachineLastRequestAt", requestTime)
     Marker:SetAttribute("StardustMachineClientThrottleRemaining", Extra.StardustMachineRequestCooldown)
+    Marker:SetAttribute("StardustMachineReadyConsumed", true)
+    Marker:SetAttribute("StardustMachineReadyDelayRemaining", 0)
     return true
 end
 
@@ -1658,6 +1692,76 @@ function Extra.setAutoMidasStatus(message)
     end
 end
 
+function Extra.getMidasTagLabel()
+    local runtime = Workspace:FindFirstChild("Runtime")
+    local followers = runtime and runtime:FindFirstChild("Followers")
+    if not followers then
+        return nil
+    end
+
+    local expectedName = LocalPlayer.Name .. "_MidasBob"
+    local follower = followers:FindFirstChild(expectedName)
+    if not follower then
+        local expectedLower = expectedName:lower()
+        for _, child in ipairs(followers:GetChildren()) do
+            if tostring(child.Name):lower() == expectedLower then
+                follower = child
+                break
+            end
+        end
+    end
+
+    if not follower then
+        return nil
+    end
+
+    local body = follower:FindFirstChild("body")
+    local mainBody = body and body:FindFirstChild("MainBody")
+    local tag = mainBody and mainBody:FindFirstChild("MidasTag")
+    tag = tag or follower:FindFirstChild("MidasTag", true)
+    local label = tag and tag:FindFirstChild("TextLabel", true)
+    if label and (label:IsA("TextLabel") or label:IsA("TextButton") or label:IsA("TextBox")) then
+        return label
+    end
+    return nil
+end
+
+function Extra.getMidasTagCount()
+    local label = Extra.getMidasTagLabel()
+    if not label then
+        return nil
+    end
+
+    local ok, contentText = pcall(function()
+        return label.ContentText
+    end)
+    local text = ok and tostring(contentText or "") or ""
+    if text == "" then
+        text = tostring(label.Text or "")
+    end
+
+    local count = tonumber(text:match("%d+"))
+    if not count then
+        return nil
+    end
+    return math.clamp(math.floor(count), 0, 10)
+end
+
+function Extra.syncAutoMidasCountFromTag()
+    local count = Extra.getMidasTagCount()
+    if count == nil then
+        return false
+    end
+
+    Extra.AutoMidasGoldCount = count
+    Extra.AutoMidasGoldCountSource = "midas-tag"
+    Marker:SetAttribute("AutoMidasGoldCount", Extra.AutoMidasGoldCount)
+    Marker:SetAttribute("AutoMidasGoldCountSource", Extra.AutoMidasGoldCountSource)
+    Marker:SetAttribute("BuffComboMidasCount", Extra.AutoMidasGoldCount)
+    Marker:SetAttribute("BuffComboMidasCountSource", Extra.AutoMidasGoldCountSource)
+    return true
+end
+
 function Extra.resetAutoMidasCount(source)
     Extra.AutoMidasGoldCount = 0
     Extra.AutoMidasGoldCountSource = source or "reset"
@@ -1667,6 +1771,7 @@ function Extra.resetAutoMidasCount(source)
 end
 
 function Extra.refreshAutoMidasBoostState()
+    Extra.syncAutoMidasCountFromTag()
     if isBoostActive("midasBob") ~= true then
         return false
     end
@@ -1683,10 +1788,18 @@ function Extra.noteMidasGoldCollected(source)
         return 0
     end
 
-    Extra.AutoMidasGoldCount = math.clamp(Extra.AutoMidasGoldCount + 1, 0, 10)
-    Extra.AutoMidasGoldCountSource = source or "observed"
+    if not Extra.syncAutoMidasCountFromTag() then
+        Extra.AutoMidasGoldCount = math.clamp(Extra.AutoMidasGoldCount + 1, 0, 10)
+        Extra.AutoMidasGoldCountSource = source or "observed"
+    end
     Extra.setAutoMidasStatus("Collected Midas bar: "
         .. tostring(Extra.AutoMidasGoldCount) .. "/10.")
+    task.delay(0.25, function()
+        if not Extra.refreshAutoMidasBoostState() then
+            Extra.syncAutoMidasCountFromTag()
+        end
+        Extra.setAutoMidasStatus("Midas tag count: " .. tostring(Extra.AutoMidasGoldCount) .. "/10.")
+    end)
     return Extra.AutoMidasGoldCount
 end
 
@@ -1695,6 +1808,7 @@ function Extra.collectAutoMidasGoldBar(id, position)
         return false
     end
 
+    Extra.syncAutoMidasCountFromTag()
     if Toggles.ToggleAutoMidasHoldAt9 and Toggles.ToggleAutoMidasHoldAt9.Value
         and Extra.AutoMidasGoldCount >= 9 then
         Extra.AutoMidasHeldGoldBar = {
@@ -3103,6 +3217,7 @@ end
 
 function Extra.printBuffComboDebug()
     ensureBoostState()
+    Extra.refreshAutoMidasBoostState()
 
     local crateReady, crateStatus, crateAlreadyBoosted, crateClaimable = Extra.getCrateReadiness()
     local totemReady, totemId = Extra.hasKnownTotem()
@@ -3134,12 +3249,11 @@ function Extra.updateBuffComboInfo()
         return
     end
 
+    if not Extra.refreshAutoMidasBoostState() then
+        Extra.syncAutoMidasCountFromTag()
+    end
     local midasCount = Extra.AutoMidasGoldCount or 0
     local midasSource = tostring(Extra.AutoMidasGoldCountSource or "event")
-    if Extra.refreshAutoMidasBoostState() then
-        midasCount = 0
-        midasSource = "boost-active"
-    end
 
     local totemReady, totemId = Extra.hasKnownTotem()
     local crateReady, crateStatus, crateAlreadyBoosted = Extra.getCrateReadiness()
@@ -3155,7 +3269,7 @@ function Extra.updateBuffComboInfo()
             .. (totemId and totemId ~= "active" and (" [" .. tostring(totemId) .. "]") or ""),
         "Totem boost: " .. Extra.boostActiveText("totem", true),
         "Crate boost: " .. Extra.boostActiveText({ "goldenCrateDrop", "crateDrop" }),
-        "Crate available: " .. Extra.boolStatus(crateClaimable),
+        "Crate available: " .. Extra.boolStatus(crateReady),
         "Crate status: " .. tostring(crateStatus),
         "Potions: " .. table.concat(potionParts, ", "),
     }
