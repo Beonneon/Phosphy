@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.10",
+    Version = "1.3.11",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -95,6 +95,11 @@ local Extra = {
     AmuletPickTimeout = 0.25,
     AmuletNextRollDelay = 0.12,
     AmuletTargetLocked = false,
+    AmuletStatusLastDisplayAt = 0,
+    AmuletRollResultHandler = nil,
+    AmuletPickResultHandler = nil,
+    AmuletSuppressedConnections = {},
+    AmuletVisualConnectionsDisabled = false,
     StardustMachineReadyDelay = 60,
     StardustMachineRequestCooldown = 60,
     StardustReadyPrinted = false,
@@ -191,6 +196,155 @@ local function getRemote(name, waitSeconds)
         Extra.RemoteCache[name] = remote
     end
     return remote
+end
+
+function Extra.setExecutorConnectionEnabled(connection, enabled)
+    local methods = enabled and { "Enable", "enable" } or { "Disable", "disable" }
+    for _, methodName in ipairs(methods) do
+        local ok, method = pcall(function()
+            return connection[methodName]
+        end)
+
+        if ok and typeof(method) == "function" then
+            local called = pcall(method, connection)
+            if not called then
+                called = pcall(method)
+            end
+            if called then
+                return true
+            end
+        end
+    end
+
+    local hasEnabled = pcall(function()
+        return connection.Enabled
+    end)
+    if hasEnabled then
+        local changed = pcall(function()
+            connection.Enabled = enabled
+        end)
+        return changed
+    end
+
+    return false
+end
+
+function Extra.amuletVisualSuppressionEnabled()
+    return not Toggles.ToggleAmuletHideRollVisuals
+        or Toggles.ToggleAmuletHideRollVisuals.Value == true
+end
+
+function Extra.isOwnAmuletSignalConnection(connection)
+    local ok, callback = pcall(function()
+        return connection.Function
+    end)
+
+    return ok
+        and typeof(callback) == "function"
+        and (callback == Extra.AmuletRollResultHandler or callback == Extra.AmuletPickResultHandler)
+end
+
+function Extra.disableAmuletVisualConnections()
+    if not Extra.amuletVisualSuppressionEnabled() then
+        return false
+    end
+
+    if Extra.AmuletVisualConnectionsDisabled then
+        return true
+    end
+
+    if typeof(getconnections) ~= "function" then
+        Marker:SetAttribute("AmuletVisualSuppressor", "getconnections unavailable")
+        return false
+    end
+
+    local disabled = 0
+    for _, remoteName in ipairs({ "AmuletRollResult", "AmuletPickResult" }) do
+        local remote = getRemote(remoteName, 2)
+        if remote then
+            local ok, signalConnections = pcall(getconnections, remote.OnClientEvent)
+            if ok and typeof(signalConnections) == "table" then
+                for _, connection in ipairs(signalConnections) do
+                    if not Extra.isOwnAmuletSignalConnection(connection) then
+                        if Extra.setExecutorConnectionEnabled(connection, false) then
+                            disabled += 1
+                            Extra.AmuletSuppressedConnections[#Extra.AmuletSuppressedConnections + 1] = connection
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    Marker:SetAttribute("AmuletVisualConnectionsDisabled", disabled)
+    Marker:SetAttribute("AmuletVisualSuppressor", disabled > 0 and "active" or "none")
+    Extra.AmuletVisualConnectionsDisabled = disabled > 0
+    return disabled > 0
+end
+
+function Extra.restoreAmuletVisualConnections()
+    for _, connection in ipairs(Extra.AmuletSuppressedConnections) do
+        Extra.setExecutorConnectionEnabled(connection, true)
+    end
+
+    Extra.AmuletSuppressedConnections = {}
+    Extra.AmuletVisualConnectionsDisabled = false
+    Marker:SetAttribute("AmuletVisualConnectionsDisabled", 0)
+    Marker:SetAttribute("AmuletVisualSuppressor", "off")
+end
+
+function Extra.cleanupAmuletRollVisuals()
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if playerGui then
+        for _, item in ipairs(playerGui:GetDescendants()) do
+            if item.Name == "DroppedAmuletsGui" and item:IsA("GuiObject") then
+                item.Visible = false
+                item.BackgroundTransparency = 1
+            elseif (item.Name == "LeftAmulets" or item.Name == "RightAmulets") and item:IsA("GuiObject") then
+                for _, child in ipairs(item:GetChildren()) do
+                    if child:IsA("GuiObject") then
+                        child:Destroy()
+                    end
+                end
+            end
+        end
+    end
+
+    local runtime = Workspace:FindFirstChild("Runtime")
+    local amulets = runtime and runtime:FindFirstChild("Amulets")
+    if amulets then
+        for _, item in ipairs(amulets:GetChildren()) do
+            if item:GetAttribute("AmuletRollReveal") == true then
+                item:Destroy()
+            end
+        end
+    end
+end
+
+function Extra.startAmuletVisualCleanup()
+    if Tasks.AmuletVisualCleanup then
+        return
+    end
+
+    Tasks.AmuletVisualCleanup = task.spawn(function()
+        while Extra.amuletVisualSuppressionEnabled() do
+            Extra.cleanupAmuletRollVisuals()
+            task.wait(0.35)
+        end
+
+        Tasks.AmuletVisualCleanup = nil
+    end)
+end
+
+function Extra.refreshAmuletVisualSuppression()
+    if Extra.amuletVisualSuppressionEnabled() then
+        Extra.disableAmuletVisualConnections()
+        Extra.cleanupAmuletRollVisuals()
+        Extra.startAmuletVisualCleanup()
+    else
+        stopTask("AmuletVisualCleanup")
+        Extra.restoreAmuletVisualConnections()
+    end
 end
 
 local function getProfileData()
@@ -3650,7 +3804,7 @@ local AmuletPreferredFields = {
 local rollAmuletOnce
 local pickLatestAmulet
 
-local function setAmuletStatus(text)
+local function setAmuletStatus(text, forceDisplay)
     LatestAmuletSummary = tostring(text or "No amulet roll yet.")
 
     local markerText = LatestAmuletSummary
@@ -3661,6 +3815,12 @@ local function setAmuletStatus(text)
     Marker:SetAttribute("AmuletLatestInfo", markerText)
 
     if AmuletStatusLabel then
+        local now = os.clock()
+        if not forceDisplay and now - Extra.AmuletStatusLastDisplayAt < 0.5 then
+            return
+        end
+
+        Extra.AmuletStatusLastDisplayAt = now
         pcall(function()
             AmuletStatusLabel:SetText(LatestAmuletSummary)
         end)
@@ -4253,74 +4413,91 @@ pickLatestAmulet = function(choice, quiet)
 end
 
 local function connectAmuletEvents()
+    Extra.refreshAmuletVisualSuppression()
+
     local rollResult = getRemote("AmuletRollResult", 10)
     if not rollResult then
         notify("AmuletRollResult remote was not found.")
         return false
     end
 
-    if not Connections.AmuletRollResult then
-        Connections.AmuletRollResult = rollResult.OnClientEvent:Connect(function(options, rollId)
-            if Marker:GetAttribute("Session") ~= Session then
-                disconnect("AmuletRollResult")
-                return
-            end
+    Extra.AmuletRollResultHandler = Extra.AmuletRollResultHandler or function(options, rollId)
+        if Marker:GetAttribute("Session") ~= Session then
+            disconnect("AmuletRollResult")
+            return
+        end
 
-            AmuletRollPending = false
-            AmuletChoicePending = true
-            AmuletPickPending = false
-            LatestAmuletRollId = rollId
+        AmuletRollPending = false
+        AmuletChoicePending = true
+        AmuletPickPending = false
+        LatestAmuletRollId = rollId
 
-            local target, targetIndex, missReason = findSelectedAmuletTarget(options)
-            LatestAmuletTarget = target
-            LatestAmuletTargetIndex = targetIndex
-            Extra.AmuletTargetLocked = target ~= nil
-            setAmuletStatus(summarizeAmuletRoll(options, rollId, target, targetIndex, missReason))
+        local target, targetIndex, missReason = findSelectedAmuletTarget(options)
+        LatestAmuletTarget = target
+        LatestAmuletTargetIndex = targetIndex
+        Extra.AmuletTargetLocked = target ~= nil
+        setAmuletStatus(
+            summarizeAmuletRoll(options, rollId, target, targetIndex, missReason),
+            target ~= nil or not (Toggles.ToggleAutoAmuletRoll and Toggles.ToggleAutoAmuletRoll.Value)
+        )
 
-            Marker:SetAttribute("AmuletLastRollId", tostring(rollId))
-            Marker:SetAttribute("AmuletLastTarget", target or "")
-            Marker:SetAttribute("AmuletLastTargetIndex", targetIndex and tostring(targetIndex) or "")
-            Marker:SetAttribute("AmuletLastResultAt", Workspace:GetServerTimeNow())
+        Marker:SetAttribute("AmuletLastRollId", tostring(rollId))
+        Marker:SetAttribute("AmuletLastTarget", target or "")
+        Marker:SetAttribute("AmuletLastTargetIndex", targetIndex and tostring(targetIndex) or "")
+        Marker:SetAttribute("AmuletLastResultAt", Workspace:GetServerTimeNow())
 
-            if target then
-                if Toggles.ToggleAutoAmuletRoll and Toggles.ToggleAutoAmuletRoll.Value then
-                    Toggles.ToggleAutoAmuletRoll:SetValue(false)
-                end
+        if Extra.amuletVisualSuppressionEnabled() then
+            Extra.cleanupAmuletRollVisuals()
+        end
 
-                notify("Amulet roll hit " .. tostring(target) .. " option(s). Choose Select New or Keep Old.")
-                return
-            end
-
+        if target then
             if Toggles.ToggleAutoAmuletRoll and Toggles.ToggleAutoAmuletRoll.Value then
-                pickLatestAmulet("OLD", true)
+                Toggles.ToggleAutoAmuletRoll:SetValue(false)
             end
-        end)
+
+            notify("Amulet roll hit " .. tostring(target) .. " option(s). Choose Select New or Keep Old.")
+            return
+        end
+
+        if Toggles.ToggleAutoAmuletRoll and Toggles.ToggleAutoAmuletRoll.Value then
+            pickLatestAmulet("OLD", true)
+        end
+    end
+
+    if not Connections.AmuletRollResult then
+        Connections.AmuletRollResult = rollResult.OnClientEvent:Connect(Extra.AmuletRollResultHandler)
     end
 
     local pickResult = getRemote("AmuletPickResult", 2)
-    if pickResult and not Connections.AmuletPickResult then
-        Connections.AmuletPickResult = pickResult.OnClientEvent:Connect(function(choice, rollId, ok, message)
-            if Marker:GetAttribute("Session") ~= Session then
-                disconnect("AmuletPickResult")
-                return
-            end
+    Extra.AmuletPickResultHandler = Extra.AmuletPickResultHandler or function(choice, rollId, ok, message)
+        if Marker:GetAttribute("Session") ~= Session then
+            disconnect("AmuletPickResult")
+            return
+        end
 
-            if rollId == LatestAmuletRollId then
-                AmuletPickPending = false
-                if ok == true then
-                    AmuletChoicePending = false
-                    if choice == "OLD" then
-                        Extra.AmuletNextRollAt = os.clock() + Extra.AmuletNextRollDelay
-                    end
-                else
-                    Extra.AmuletNextRollAt = os.clock() + 0.35
+        if rollId == LatestAmuletRollId then
+            AmuletPickPending = false
+            if ok == true then
+                AmuletChoicePending = false
+                if choice == "OLD" then
+                    Extra.AmuletNextRollAt = os.clock() + Extra.AmuletNextRollDelay
                 end
+            else
+                Extra.AmuletNextRollAt = os.clock() + 0.35
             end
+        end
 
-            Marker:SetAttribute("AmuletLastPickResult", tostring(ok))
-            Marker:SetAttribute("AmuletLastPickMessage", tostring(message or ""))
-            Marker:SetAttribute("AmuletLastPickChoice", tostring(choice or ""))
-        end)
+        if Extra.amuletVisualSuppressionEnabled() then
+            Extra.cleanupAmuletRollVisuals()
+        end
+
+        Marker:SetAttribute("AmuletLastPickResult", tostring(ok))
+        Marker:SetAttribute("AmuletLastPickMessage", tostring(message or ""))
+        Marker:SetAttribute("AmuletLastPickChoice", tostring(choice or ""))
+    end
+
+    if pickResult and not Connections.AmuletPickResult then
+        Connections.AmuletPickResult = pickResult.OnClientEvent:Connect(Extra.AmuletPickResultHandler)
     end
 
     return true
@@ -4347,12 +4524,12 @@ rollAmuletOnce = function()
     AmuletRollPending = true
     remote:FireServer()
     Marker:SetAttribute("AmuletRolledAt", Workspace:GetServerTimeNow())
-    setAmuletStatus("Rolling amulet...")
+    setAmuletStatus("Rolling amulet...", true)
 
     task.delay(3, function()
         if AmuletRollPending then
             AmuletRollPending = false
-            setAmuletStatus("Amulet roll timed out. Try Roll Once again.")
+            setAmuletStatus("Amulet roll timed out. Try Roll Once again.", true)
         end
     end)
 
@@ -5696,6 +5873,10 @@ AmuletBox:AddSlider("AutoAmuletRollDelayMs", {
     Rounding = 0,
     Suffix = " ms",
 })
+AmuletBox:AddCheckbox("ToggleAmuletHideRollVisuals", {
+    Text = "Hide Roll Cards/Animation",
+    Default = true,
+})
 AmuletBox:AddCheckbox("ToggleAutoAmuletRoll", {
     Text = "Auto Roll Until Count",
     Default = false,
@@ -6041,6 +6222,9 @@ Toggles.ToggleAutoAmuletRoll:OnChanged(function(state)
         stopTask("AutoAmuletRoll")
     end
 end)
+Toggles.ToggleAmuletHideRollVisuals:OnChanged(function()
+    Extra.refreshAmuletVisualSuppression()
+end)
 Toggles.ToggleAutoCSlime:OnChanged(function(state)
     if state then
         Extra.startAutoCSlime()
@@ -6192,6 +6376,8 @@ Library:OnUnload(function()
     stopPlayerSpeed()
     Extra.stopPerformance()
     Extra.stopPerfSlimeWatcher()
+    stopTask("AmuletVisualCleanup")
+    Extra.restoreAmuletVisualConnections()
 
     for name in pairs(Tasks) do
         stopTask(name)
