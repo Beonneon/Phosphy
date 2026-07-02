@@ -3638,6 +3638,8 @@ Extra.AmuletCombinedStatFields = {
     Exp = { "expBonus", "expMultiplier", "xpBonus", "xpMultiplier" },
     Gems = { "gemsBonus", "gemBonus", "gemsMultiplier", "gemMultiplier" },
 }
+Extra.AmuletCustomComboSlots = {}
+Extra.AmuletCustomComboSlotLimit = 6
 
 local AmuletPreferredFields = {
     "rarity",
@@ -3740,16 +3742,46 @@ function Extra.hasSelectedAmuletTypes()
     return false
 end
 
-function Extra.getSelectedAmuletCombos()
-    local dropdown = Options.AmuletRequiredCombos
+function Extra.getAmuletComboFromDropdown(dropdownId)
+    local dropdown = Options[dropdownId]
     if not dropdown or typeof(dropdown.Value) ~= "table" then
         return {}
     end
 
-    local selected = {}
+    local combo = {}
     for value, active in pairs(dropdown.Value) do
-        if active and Extra.AmuletComboTypes[value] then
-            selected[#selected + 1] = Extra.AmuletComboTypes[value]
+        if active then
+            local amuletType = Extra.normalizeAmuletTypeName(value)
+            if amuletType and not table.find(combo, amuletType) then
+                combo[#combo + 1] = amuletType
+            end
+        end
+    end
+
+    return combo
+end
+
+function Extra.getSelectedAmuletCombos()
+    local dropdown = Options.AmuletRequiredCombos
+    if not dropdown or typeof(dropdown.Value) ~= "table" then
+        dropdown = nil
+    end
+
+    local selected = {}
+    if dropdown then
+        for value, active in pairs(dropdown.Value) do
+            if active and Extra.AmuletComboTypes[value] then
+                selected[#selected + 1] = Extra.AmuletComboTypes[value]
+            end
+        end
+    end
+
+    for _, slot in pairs(Extra.AmuletCustomComboSlots) do
+        if slot.Active then
+            local combo = Extra.getAmuletComboFromDropdown(slot.DropdownId)
+            if #combo > 0 then
+                selected[#selected + 1] = combo
+            end
         end
     end
 
@@ -5529,6 +5561,83 @@ TotemBox:AddCheckbox("ToggleAutoTotemContact", {
 })
 
 local AmuletBox = Tabs.Automation:AddLeftGroupbox("Auto Amulet", "gem")
+function Extra.countActiveAmuletCustomComboSlots()
+    local count = 0
+    for _, slot in pairs(Extra.AmuletCustomComboSlots) do
+        if slot.Active then
+            count += 1
+        end
+    end
+
+    return count
+end
+
+function Extra.hideAmuletCustomComboSlot(index)
+    local slot = Extra.AmuletCustomComboSlots[index]
+    if not slot then
+        return false
+    end
+
+    slot.Active = false
+    if slot.Dropdown then
+        slot.Dropdown:SetValue({})
+        slot.Dropdown:SetVisible(false)
+    end
+    if slot.RemoveButton then
+        slot.RemoveButton:SetVisible(false)
+    end
+
+    Marker:SetAttribute("AmuletCustomComboSlots", Extra.countActiveAmuletCustomComboSlots())
+    return true
+end
+
+function Extra.showAmuletCustomComboSlot()
+    for index = 1, Extra.AmuletCustomComboSlotLimit do
+        local slot = Extra.AmuletCustomComboSlots[index]
+        if slot and not slot.Active then
+            slot.Active = true
+            if slot.Dropdown then
+                slot.Dropdown:SetVisible(true)
+            end
+            if slot.RemoveButton then
+                slot.RemoveButton:SetVisible(true)
+            end
+
+            Marker:SetAttribute("AmuletCustomComboSlots", Extra.countActiveAmuletCustomComboSlots())
+            return true
+        end
+    end
+
+    notify("Max custom combo dropdowns are already added.")
+    return false
+end
+
+function Extra.createAmuletCustomComboSlot(groupbox, index)
+    local slot = {
+        Active = false,
+        DropdownId = "AmuletCustomCombo" .. tostring(index),
+    }
+    Extra.AmuletCustomComboSlots[index] = slot
+
+    slot.Dropdown = groupbox:AddDropdown(slot.DropdownId, {
+        Text = "Custom Combo " .. tostring(index),
+        Values = Extra.AmuletTypeValues,
+        Multi = true,
+        AllowNull = true,
+        Default = {},
+    })
+    slot.RemoveButton = groupbox:AddButton({
+        Text = "Remove Combo " .. tostring(index),
+        Func = function()
+            Extra.hideAmuletCustomComboSlot(index)
+        end,
+    })
+
+    slot.Dropdown:SetVisible(false)
+    slot.RemoveButton:SetVisible(false)
+    return slot
+end
+
 AmuletBox:AddDropdown("AmuletOptionCounts", {
     Text = "Stop On Option Count",
     Values = AmuletCountValues,
@@ -5550,6 +5659,15 @@ AmuletBox:AddDropdown("AmuletRequiredCombos", {
     AllowNull = true,
     Default = {},
 })
+AmuletBox:AddButton({
+    Text = "Add Custom Combo",
+    Func = function()
+        Extra.showAmuletCustomComboSlot()
+    end,
+})
+for index = 1, Extra.AmuletCustomComboSlotLimit do
+    Extra.createAmuletCustomComboSlot(AmuletBox, index)
+end
 AmuletBox:AddCheckbox("ToggleRequireAmuletType", {
     Text = "Require Types/Combos",
     Default = false,
