@@ -3619,20 +3619,6 @@ Extra.AmuletTypeAliases = {
     ["404"] = "Amulet404",
     amulet404 = "Amulet404",
 }
-Extra.AmuletComboValues = {
-    "Summoner + Glitch",
-    "Godly + Summoner",
-    "Godly + Glitch",
-    "Summoner + 404",
-    "Godly + 404",
-}
-Extra.AmuletComboTypes = {
-    ["Summoner + Glitch"] = { "SummonerAmulet", "CorruptedAmulet" },
-    ["Godly + Summoner"] = { "GodlyAmulet", "SummonerAmulet" },
-    ["Godly + Glitch"] = { "GodlyAmulet", "CorruptedAmulet" },
-    ["Summoner + 404"] = { "SummonerAmulet", "Amulet404" },
-    ["Godly + 404"] = { "GodlyAmulet", "Amulet404" },
-}
 Extra.AmuletCombinedStatFields = {
     Slimes = { "slimesBonus", "slimeBonus", "slimeMultiplier", "slimesMultiplier" },
     Exp = { "expBonus", "expMultiplier", "xpBonus", "xpMultiplier" },
@@ -3762,20 +3748,7 @@ function Extra.getAmuletComboFromDropdown(dropdownId)
 end
 
 function Extra.getSelectedAmuletCombos()
-    local dropdown = Options.AmuletRequiredCombos
-    if not dropdown or typeof(dropdown.Value) ~= "table" then
-        dropdown = nil
-    end
-
     local selected = {}
-    if dropdown then
-        for value, active in pairs(dropdown.Value) do
-            if active and Extra.AmuletComboTypes[value] then
-                selected[#selected + 1] = Extra.AmuletComboTypes[value]
-            end
-        end
-    end
-
     for _, slot in pairs(Extra.AmuletCustomComboSlots) do
         if slot.Active then
             local combo = Extra.getAmuletComboFromDropdown(slot.DropdownId)
@@ -3800,9 +3773,9 @@ end
 
 function Extra.getAmuletMinimumStats()
     return {
-        Slimes = math.max(0, getNumberOption("AmuletMinCombinedSlimes", 0)),
-        Exp = math.max(0, getNumberOption("AmuletMinCombinedExp", 0)),
-        Gems = math.max(0, getNumberOption("AmuletMinCombinedGems", 0)),
+        Slimes = math.max(0, getNumberOption("AmuletMinCombinedSlimesInput", 0)),
+        Exp = math.max(0, getNumberOption("AmuletMinCombinedExpInput", 0)),
+        Gems = math.max(0, getNumberOption("AmuletMinCombinedGemsInput", 0)),
     }
 end
 
@@ -3814,6 +3787,11 @@ function Extra.hasAmuletMinimumStats()
     end
 
     return false
+end
+
+function Extra.shouldMatchAnyAmuletMinimumStat()
+    return Toggles.ToggleAmuletAnyMinimumStat
+        and Toggles.ToggleAmuletAnyMinimumStat.Value
 end
 
 local function compactAmuletValue(value)
@@ -4041,6 +4019,16 @@ function Extra.matchAmuletMinimumStats(options, keys)
     end
 
     local combined = Extra.getCombinedAmuletStats(options, keys)
+    if Extra.shouldMatchAnyAmuletMinimumStat() then
+        for statName, minimum in pairs(minimums) do
+            if minimum > 0 and (combined[statName] or 0) >= minimum then
+                return true
+            end
+        end
+
+        return false, "value"
+    end
+
     for statName, minimum in pairs(minimums) do
         if minimum > 0 and (combined[statName] or 0) < minimum then
             return false, "value"
@@ -5652,13 +5640,6 @@ AmuletBox:AddDropdown("AmuletRequiredTypes", {
     AllowNull = true,
     Default = {},
 })
-AmuletBox:AddDropdown("AmuletRequiredCombos", {
-    Text = "Required Combo",
-    Values = Extra.AmuletComboValues,
-    Multi = true,
-    AllowNull = true,
-    Default = {},
-})
 AmuletBox:AddButton({
     Text = "Add Custom Combo",
     Func = function()
@@ -5676,29 +5657,36 @@ AmuletBox:AddCheckbox("ToggleRequireAllAmuletTypes", {
     Text = "Selected Types Are Combo",
     Default = false,
 })
-AmuletBox:AddSlider("AmuletMinCombinedSlimes", {
+AmuletBox:AddCheckbox("ToggleAmuletAnyMinimumStat", {
+    Text = "Any Min Value Passes",
+    Default = false,
+})
+AmuletBox:AddInput("AmuletMinCombinedSlimesInput", {
     Text = "Min x Slimes Combined",
-    Min = 0,
-    Max = 10000,
-    Default = 0,
-    Rounding = 2,
-    Suffix = "x",
+    Default = "0",
+    Numeric = true,
+    AllowEmpty = false,
+    EmptyReset = "0",
+    ClearTextOnFocus = false,
+    Placeholder = "0",
 })
-AmuletBox:AddSlider("AmuletMinCombinedExp", {
+AmuletBox:AddInput("AmuletMinCombinedExpInput", {
     Text = "Min x Exp Combined",
-    Min = 0,
-    Max = 10000,
-    Default = 0,
-    Rounding = 2,
-    Suffix = "x",
+    Default = "0",
+    Numeric = true,
+    AllowEmpty = false,
+    EmptyReset = "0",
+    ClearTextOnFocus = false,
+    Placeholder = "0",
 })
-AmuletBox:AddSlider("AmuletMinCombinedGems", {
+AmuletBox:AddInput("AmuletMinCombinedGemsInput", {
     Text = "Min x Gems Combined",
-    Min = 0,
-    Max = 10000,
-    Default = 0,
-    Rounding = 2,
-    Suffix = "x",
+    Default = "0",
+    Numeric = true,
+    AllowEmpty = false,
+    EmptyReset = "0",
+    ClearTextOnFocus = false,
+    Placeholder = "0",
 })
 AmuletBox:AddSlider("AutoAmuletRollDelayMs", {
     Text = "Roll Delay",
