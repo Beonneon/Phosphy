@@ -937,19 +937,16 @@ function Extra.startInstantSpawnCollector()
     end)
 end
 
-local function collectNearbyOnce()
+function Extra.getSlimeCandidates(root, includeAll)
     local slimes = getSlimesFolder()
-    local root = getRoot()
-    if not slimes or not root then
-        return 0
-    end
-
     local now = os.clock()
     local radius = getRadius()
-    local batchSize = getBatchSize()
     local retryDelay = getRetryDelay()
     local collectAll = Toggles.ToggleCollectAll and Toggles.ToggleCollectAll.Value
     local candidates = {}
+    if not slimes or not root then
+        return candidates
+    end
 
     for _, slime in ipairs(slimes:GetChildren()) do
         local id = getSlimeId(slime)
@@ -957,10 +954,11 @@ local function collectNearbyOnce()
             local position = getSlimePosition(slime)
             if position then
                 local distance = (position - root.Position).Magnitude
-                if collectAll or distance <= radius then
+                if includeAll or collectAll or distance <= radius then
                     table.insert(candidates, {
                         Id = id,
                         Distance = distance,
+                        Position = position,
                     })
                 end
             end
@@ -971,6 +969,38 @@ local function collectNearbyOnce()
         return a.Distance < b.Distance
     end)
 
+    return candidates
+end
+
+function Extra.teleportToSlimeCandidate(candidate)
+    local position = candidate and candidate.Position
+    local root = getRoot()
+    if typeof(position) ~= "Vector3" or not root then
+        return false
+    end
+
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+    root.CFrame = CFrame.new(position + Vector3.new(0, 3, 0))
+    Marker:SetAttribute("SlimeLastTeleportAt", Workspace:GetServerTimeNow())
+    return true
+end
+
+local function collectNearbyOnce(teleportFirst)
+    local root = getRoot()
+    if not root then
+        return 0
+    end
+
+    local candidates = Extra.getSlimeCandidates(root, teleportFirst == true)
+    if teleportFirst == true and candidates[1] and Extra.teleportToSlimeCandidate(candidates[1]) then
+        task.wait(0.2)
+        root = getRoot()
+        candidates = Extra.getSlimeCandidates(root, false)
+    end
+
+    local now = os.clock()
+    local batchSize = getBatchSize()
     local ids = {}
     for index = 1, math.min(batchSize, #candidates) do
         local id = candidates[index].Id
@@ -3542,6 +3572,7 @@ Extra.AmuletTypeValues = {
     "Godly",
     "Gift",
     "Corrupted",
+    "Glitch",
     "Stardust",
     "Slimes",
     "Exp",
@@ -3568,6 +3599,9 @@ Extra.AmuletTypeAliases = {
     giftamulet = "GiftAmulet",
     corrupted = "CorruptedAmulet",
     corruptedamulet = "CorruptedAmulet",
+    corrupt = "CorruptedAmulet",
+    glitch = "CorruptedAmulet",
+    glitchamulet = "CorruptedAmulet",
     stardust = "StardustAmulet",
     stardustamulet = "StardustAmulet",
     slimes = "SlimesAmulet",
@@ -3584,6 +3618,25 @@ Extra.AmuletTypeAliases = {
     corruptchanceamulet = "CorruptChanceAmulet",
     ["404"] = "Amulet404",
     amulet404 = "Amulet404",
+}
+Extra.AmuletComboValues = {
+    "Summoner + Glitch",
+    "Godly + Summoner",
+    "Godly + Glitch",
+    "Summoner + 404",
+    "Godly + 404",
+}
+Extra.AmuletComboTypes = {
+    ["Summoner + Glitch"] = { "SummonerAmulet", "CorruptedAmulet" },
+    ["Godly + Summoner"] = { "GodlyAmulet", "SummonerAmulet" },
+    ["Godly + Glitch"] = { "GodlyAmulet", "CorruptedAmulet" },
+    ["Summoner + 404"] = { "SummonerAmulet", "Amulet404" },
+    ["Godly + 404"] = { "GodlyAmulet", "Amulet404" },
+}
+Extra.AmuletCombinedStatFields = {
+    Slimes = { "slimesBonus", "slimeBonus", "slimeMultiplier", "slimesMultiplier" },
+    Exp = { "expBonus", "expMultiplier", "xpBonus", "xpMultiplier" },
+    Gems = { "gemsBonus", "gemBonus", "gemsMultiplier", "gemMultiplier" },
 }
 
 local AmuletPreferredFields = {
@@ -3687,10 +3740,48 @@ function Extra.hasSelectedAmuletTypes()
     return false
 end
 
+function Extra.getSelectedAmuletCombos()
+    local dropdown = Options.AmuletRequiredCombos
+    if not dropdown or typeof(dropdown.Value) ~= "table" then
+        return {}
+    end
+
+    local selected = {}
+    for value, active in pairs(dropdown.Value) do
+        if active and Extra.AmuletComboTypes[value] then
+            selected[#selected + 1] = Extra.AmuletComboTypes[value]
+        end
+    end
+
+    return selected
+end
+
+function Extra.hasSelectedAmuletCombos()
+    return #Extra.getSelectedAmuletCombos() > 0
+end
+
 function Extra.shouldRequireSelectedAmuletType()
     return Toggles.ToggleRequireAmuletType
         and Toggles.ToggleRequireAmuletType.Value
-        and Extra.hasSelectedAmuletTypes()
+        and (Extra.hasSelectedAmuletTypes() or Extra.hasSelectedAmuletCombos())
+end
+
+function Extra.getAmuletMinimumStats()
+    return {
+        Slimes = math.max(0, getNumberOption("AmuletMinCombinedSlimes", 0)),
+        Exp = math.max(0, getNumberOption("AmuletMinCombinedExp", 0)),
+        Gems = math.max(0, getNumberOption("AmuletMinCombinedGems", 0)),
+    }
+end
+
+function Extra.hasAmuletMinimumStats()
+    for _, minimum in pairs(Extra.getAmuletMinimumStats()) do
+        if minimum > 0 then
+            return true
+        end
+    end
+
+    return false
 end
 
 local function compactAmuletValue(value)
@@ -3774,6 +3865,166 @@ function Extra.optionMatchesSelectedAmuletType(option)
     return Extra.getSelectedAmuletTypes()[amuletType] == true
 end
 
+function Extra.getAmuletTypeIndex(options, keys)
+    local present = {}
+    local firstKey = {}
+
+    for _, key in ipairs(keys) do
+        local amuletType = Extra.normalizeAmuletTypeName(getAmuletType(options[key]))
+        if amuletType then
+            present[amuletType] = true
+            firstKey[amuletType] = firstKey[amuletType] or key
+        end
+    end
+
+    return present, firstKey
+end
+
+function Extra.matchAmuletCombos(options, keys)
+    local combos = Extra.getSelectedAmuletCombos()
+    if #combos == 0 then
+        return true, nil
+    end
+
+    local present, firstKey = Extra.getAmuletTypeIndex(options, keys)
+    for _, combo in ipairs(combos) do
+        local matched = true
+        local matchedKey = nil
+        for _, amuletType in ipairs(combo) do
+            if not present[amuletType] then
+                matched = false
+                break
+            end
+            matchedKey = matchedKey or firstKey[amuletType]
+        end
+
+        if matched then
+            return true, matchedKey
+        end
+    end
+
+    return false, nil
+end
+
+function Extra.matchSelectedAmuletTypes(options, keys)
+    local selected = Extra.getSelectedAmuletTypes()
+    local hasSelection = false
+    for _ in pairs(selected) do
+        hasSelection = true
+        break
+    end
+
+    if not hasSelection then
+        return true, nil
+    end
+
+    local present, firstKey = Extra.getAmuletTypeIndex(options, keys)
+    if Toggles.ToggleRequireAllAmuletTypes and Toggles.ToggleRequireAllAmuletTypes.Value then
+        local matchedKey = nil
+        for amuletType in pairs(selected) do
+            if not present[amuletType] then
+                return false, nil
+            end
+            matchedKey = matchedKey or firstKey[amuletType]
+        end
+
+        return true, matchedKey
+    end
+
+    for amuletType in pairs(selected) do
+        if present[amuletType] then
+            return true, firstKey[amuletType]
+        end
+    end
+
+    return false, nil
+end
+
+function Extra.matchAmuletTypeRules(options, keys)
+    if not Extra.shouldRequireSelectedAmuletType() then
+        return true, nil
+    end
+
+    if Extra.hasSelectedAmuletCombos() then
+        local comboMatched, comboKey = Extra.matchAmuletCombos(options, keys)
+        if comboMatched then
+            return true, comboKey
+        end
+
+        return false, nil, "combo"
+    end
+
+    local typeMatched, typeKey = Extra.matchSelectedAmuletTypes(options, keys)
+    if typeMatched then
+        return true, typeKey
+    end
+
+    return false, nil, "type"
+end
+
+function Extra.getAmuletStatValue(option, statName)
+    if typeof(option) ~= "table" then
+        return 1
+    end
+
+    for _, field in ipairs(Extra.AmuletCombinedStatFields[statName] or {}) do
+        local value = option[field]
+        if typeof(value) == "number" then
+            return value
+        end
+    end
+
+    return 1
+end
+
+function Extra.getCombinedAmuletStats(options, keys)
+    local combined = {
+        Slimes = 1,
+        Exp = 1,
+        Gems = 1,
+    }
+
+    for _, key in ipairs(keys) do
+        for statName in pairs(combined) do
+            combined[statName] *= Extra.getAmuletStatValue(options[key], statName)
+        end
+    end
+
+    return combined
+end
+
+function Extra.formatAmuletNumber(value)
+    local rounded = math.floor((tonumber(value) or 0) * 100 + 0.5) / 100
+    if rounded == math.floor(rounded) then
+        return tostring(math.floor(rounded))
+    end
+
+    return tostring(rounded):gsub("0+$", ""):gsub("%.$", "")
+end
+
+function Extra.matchAmuletMinimumStats(options, keys)
+    local minimums = Extra.getAmuletMinimumStats()
+    if not Extra.hasAmuletMinimumStats() then
+        return true
+    end
+
+    local combined = Extra.getCombinedAmuletStats(options, keys)
+    for statName, minimum in pairs(minimums) do
+        if minimum > 0 and (combined[statName] or 0) < minimum then
+            return false, "value"
+        end
+    end
+
+    return true
+end
+
+function Extra.describeCombinedAmuletStats(options, keys)
+    local combined = Extra.getCombinedAmuletStats(options, keys)
+    return "Combined: Slimes x" .. Extra.formatAmuletNumber(combined.Slimes)
+        .. " | Exp x" .. Extra.formatAmuletNumber(combined.Exp)
+        .. " | Gems x" .. Extra.formatAmuletNumber(combined.Gems)
+end
+
 local function summarizeAmuletOption(option, index, matched)
     if typeof(option) ~= "table" then
         return "[" .. tostring(index) .. "] " .. tostring(option)
@@ -3855,17 +4106,17 @@ local function findSelectedAmuletTarget(options)
     local keys = getOrderedAmuletOptionKeys(options)
     local count = #keys
     if isSelectedAmuletCount(count) then
-        if Extra.shouldRequireSelectedAmuletType() then
-            for _, key in ipairs(keys) do
-                if Extra.optionMatchesSelectedAmuletType(options[key]) then
-                    return count, key
-                end
-            end
-
-            return nil, nil, "type"
+        local typeMatched, targetIndex, typeMissReason = Extra.matchAmuletTypeRules(options, keys)
+        if not typeMatched then
+            return nil, nil, typeMissReason
         end
 
-        return count, nil
+        local valueMatched, valueMissReason = Extra.matchAmuletMinimumStats(options, keys)
+        if not valueMatched then
+            return nil, nil, valueMissReason
+        end
+
+        return count, targetIndex
     end
 
     return nil, nil
@@ -3875,8 +4126,12 @@ local function summarizeAmuletRoll(options, rollId, target, targetIndex, missRea
     local lines = {}
     if target then
         lines[#lines + 1] = "Roll " .. tostring(rollId or "?") .. " hit selected count: " .. tostring(target) .. " option(s)."
+    elseif missReason == "combo" then
+        lines[#lines + 1] = "Roll " .. tostring(rollId or "?") .. " hit selected count, but missed required combo."
     elseif missReason == "type" then
         lines[#lines + 1] = "Roll " .. tostring(rollId or "?") .. " hit selected count, but missed required amulet type."
+    elseif missReason == "value" then
+        lines[#lines + 1] = "Roll " .. tostring(rollId or "?") .. " hit selected count, but missed minimum combined values."
     else
         lines[#lines + 1] = "Roll " .. tostring(rollId or "?") .. " did not hit a selected option count."
     end
@@ -3887,7 +4142,9 @@ local function summarizeAmuletRoll(options, rollId, target, targetIndex, missRea
     end
 
     local count = 0
-    for _, key in ipairs(getOrderedAmuletOptionKeys(options)) do
+    local keys = getOrderedAmuletOptionKeys(options)
+    lines[#lines + 1] = Extra.describeCombinedAmuletStats(options, keys)
+    for _, key in ipairs(keys) do
         count += 1
         if count <= 4 then
             lines[#lines + 1] = summarizeAmuletOption(options[key], key, key == targetIndex)
@@ -4096,8 +4353,8 @@ local function startAutoAmuletRoll()
 
     if Toggles.ToggleRequireAmuletType
         and Toggles.ToggleRequireAmuletType.Value
-        and not Extra.hasSelectedAmuletTypes() then
-        notify("Select at least one required amulet type first.")
+        and not (Extra.hasSelectedAmuletTypes() or Extra.hasSelectedAmuletCombos()) then
+        notify("Select at least one required amulet type or combo first.")
         Toggles.ToggleAutoAmuletRoll:SetValue(false)
         return
     end
@@ -5164,7 +5421,7 @@ CollectorBox:AddSlider("CollectorBatchSize", {
 CollectorBox:AddButton({
     Text = "Collect Once",
     Func = function()
-        notify("Collected " .. tostring(collectNearbyOnce()) .. " slime id(s).")
+        notify("Collected " .. tostring(collectNearbyOnce(true)) .. " slime id(s).")
     end,
 })
 CollectorBox:AddButton({
@@ -5286,9 +5543,44 @@ AmuletBox:AddDropdown("AmuletRequiredTypes", {
     AllowNull = true,
     Default = {},
 })
+AmuletBox:AddDropdown("AmuletRequiredCombos", {
+    Text = "Required Combo",
+    Values = Extra.AmuletComboValues,
+    Multi = true,
+    AllowNull = true,
+    Default = {},
+})
 AmuletBox:AddCheckbox("ToggleRequireAmuletType", {
-    Text = "Require Type On Count Hit",
+    Text = "Require Types/Combos",
     Default = false,
+})
+AmuletBox:AddCheckbox("ToggleRequireAllAmuletTypes", {
+    Text = "Selected Types Are Combo",
+    Default = false,
+})
+AmuletBox:AddSlider("AmuletMinCombinedSlimes", {
+    Text = "Min x Slimes Combined",
+    Min = 0,
+    Max = 10000,
+    Default = 0,
+    Rounding = 2,
+    Suffix = "x",
+})
+AmuletBox:AddSlider("AmuletMinCombinedExp", {
+    Text = "Min x Exp Combined",
+    Min = 0,
+    Max = 10000,
+    Default = 0,
+    Rounding = 2,
+    Suffix = "x",
+})
+AmuletBox:AddSlider("AmuletMinCombinedGems", {
+    Text = "Min x Gems Combined",
+    Min = 0,
+    Max = 10000,
+    Default = 0,
+    Rounding = 2,
+    Suffix = "x",
 })
 AmuletBox:AddSlider("AutoAmuletRollDelayMs", {
     Text = "Roll Delay",
