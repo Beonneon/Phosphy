@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.11",
+    Version = "1.3.12",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -229,18 +229,53 @@ function Extra.setExecutorConnectionEnabled(connection, enabled)
     return false
 end
 
+function Extra.getExecutorConnectionCallback(connection)
+    for _, key in ipairs({ "Function", "Callback", "func" }) do
+        local ok, callback = pcall(function()
+            return connection[key]
+        end)
+
+        if ok and typeof(callback) == "function" then
+            return callback
+        end
+    end
+
+    return nil
+end
+
+function Extra.fireExecutorConnection(connection, callback, ...)
+    for _, methodName in ipairs({ "Fire", "fire" }) do
+        local ok, method = pcall(function()
+            return connection[methodName]
+        end)
+
+        if ok and typeof(method) == "function" then
+            local fired = pcall(method, connection, ...)
+            if not fired then
+                fired = pcall(method, ...)
+            end
+            if fired then
+                return true
+            end
+        end
+    end
+
+    if typeof(callback) == "function" then
+        return pcall(callback, ...)
+    end
+
+    return false
+end
+
 function Extra.amuletVisualSuppressionEnabled()
     return not Toggles.ToggleAmuletHideRollVisuals
         or Toggles.ToggleAmuletHideRollVisuals.Value == true
 end
 
 function Extra.isOwnAmuletSignalConnection(connection)
-    local ok, callback = pcall(function()
-        return connection.Function
-    end)
+    local callback = Extra.getExecutorConnectionCallback(connection)
 
-    return ok
-        and typeof(callback) == "function"
+    return typeof(callback) == "function"
         and (callback == Extra.AmuletRollResultHandler or callback == Extra.AmuletPickResultHandler)
 end
 
@@ -268,7 +303,11 @@ function Extra.disableAmuletVisualConnections()
                     if not Extra.isOwnAmuletSignalConnection(connection) then
                         if Extra.setExecutorConnectionEnabled(connection, false) then
                             disabled += 1
-                            Extra.AmuletSuppressedConnections[#Extra.AmuletSuppressedConnections + 1] = connection
+                            Extra.AmuletSuppressedConnections[#Extra.AmuletSuppressedConnections + 1] = {
+                                Connection = connection,
+                                RemoteName = remoteName,
+                                Callback = Extra.getExecutorConnectionCallback(connection),
+                            }
                         end
                     end
                 end
@@ -283,14 +322,34 @@ function Extra.disableAmuletVisualConnections()
 end
 
 function Extra.restoreAmuletVisualConnections()
-    for _, connection in ipairs(Extra.AmuletSuppressedConnections) do
-        Extra.setExecutorConnectionEnabled(connection, true)
+    for _, entry in ipairs(Extra.AmuletSuppressedConnections) do
+        Extra.setExecutorConnectionEnabled(entry.Connection or entry, true)
     end
 
     Extra.AmuletSuppressedConnections = {}
     Extra.AmuletVisualConnectionsDisabled = false
     Marker:SetAttribute("AmuletVisualConnectionsDisabled", 0)
     Marker:SetAttribute("AmuletVisualSuppressor", "off")
+end
+
+function Extra.showAmuletRollVisualsForTarget(options, rollId)
+    local suppressedConnections = Extra.AmuletSuppressedConnections
+    stopTask("AmuletVisualCleanup")
+    Extra.cleanupAmuletRollVisuals()
+    Extra.restoreAmuletVisualConnections()
+
+    local replayed = 0
+    for _, entry in ipairs(suppressedConnections) do
+        if entry.RemoteName == "AmuletRollResult" then
+            if Extra.fireExecutorConnection(entry.Connection, entry.Callback, options, rollId) then
+                replayed += 1
+            end
+        end
+    end
+
+    Marker:SetAttribute("AmuletTargetVisualsReplayed", replayed)
+    Marker:SetAttribute("AmuletVisualSuppressor", replayed > 0 and "target replay" or "target restored")
+    return replayed > 0
 end
 
 function Extra.cleanupAmuletRollVisuals()
@@ -4451,6 +4510,10 @@ local function connectAmuletEvents()
         end
 
         if target then
+            if Extra.amuletVisualSuppressionEnabled() then
+                Extra.showAmuletRollVisualsForTarget(options, rollId)
+            end
+
             if Toggles.ToggleAutoAmuletRoll and Toggles.ToggleAutoAmuletRoll.Value then
                 Toggles.ToggleAutoAmuletRoll:SetValue(false)
             end
