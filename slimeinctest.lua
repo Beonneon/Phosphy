@@ -3974,7 +3974,7 @@ end
 
 function Extra.getAmuletStatValue(option, statName)
     if typeof(option) ~= "table" then
-        return 1
+        return 0
     end
 
     for _, field in ipairs(Extra.AmuletCombinedStatFields[statName] or {}) do
@@ -3984,19 +3984,19 @@ function Extra.getAmuletStatValue(option, statName)
         end
     end
 
-    return 1
+    return 0
 end
 
 function Extra.getCombinedAmuletStats(options, keys)
     local combined = {
-        Slimes = 1,
-        Exp = 1,
-        Gems = 1,
+        Slimes = 0,
+        Exp = 0,
+        Gems = 0,
     }
 
     for _, key in ipairs(keys) do
         for statName in pairs(combined) do
-            combined[statName] *= Extra.getAmuletStatValue(options[key], statName)
+            combined[statName] += Extra.getAmuletStatValue(options[key], statName)
         end
     end
 
@@ -4040,9 +4040,9 @@ end
 
 function Extra.describeCombinedAmuletStats(options, keys)
     local combined = Extra.getCombinedAmuletStats(options, keys)
-    return "Combined: Slimes x" .. Extra.formatAmuletNumber(combined.Slimes)
-        .. " | Exp x" .. Extra.formatAmuletNumber(combined.Exp)
-        .. " | Gems x" .. Extra.formatAmuletNumber(combined.Gems)
+    return "Combined: Slimes +" .. Extra.formatAmuletNumber(combined.Slimes)
+        .. " | Exp +" .. Extra.formatAmuletNumber(combined.Exp)
+        .. " | Gems +" .. Extra.formatAmuletNumber(combined.Gems)
 end
 
 local function summarizeAmuletOption(option, index, matched)
@@ -5662,7 +5662,7 @@ AmuletBox:AddCheckbox("ToggleAmuletAnyMinimumStat", {
     Default = false,
 })
 AmuletBox:AddInput("AmuletMinCombinedSlimesInput", {
-    Text = "Min x Slimes Combined",
+    Text = "Min Slimes Total",
     Default = "0",
     Numeric = true,
     AllowEmpty = false,
@@ -5671,7 +5671,7 @@ AmuletBox:AddInput("AmuletMinCombinedSlimesInput", {
     Placeholder = "0",
 })
 AmuletBox:AddInput("AmuletMinCombinedExpInput", {
-    Text = "Min x Exp Combined",
+    Text = "Min Exp Total",
     Default = "0",
     Numeric = true,
     AllowEmpty = false,
@@ -5680,7 +5680,7 @@ AmuletBox:AddInput("AmuletMinCombinedExpInput", {
     Placeholder = "0",
 })
 AmuletBox:AddInput("AmuletMinCombinedGemsInput", {
-    Text = "Min x Gems Combined",
+    Text = "Min Gems Total",
     Default = "0",
     Numeric = true,
     AllowEmpty = false,
