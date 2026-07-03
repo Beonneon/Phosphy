@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.15",
+    Version = "1.3.16",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -103,6 +103,7 @@ local Extra = {
     AmuletVisualConnectionsDisabled = false,
     StardustMachineReadyDelay = 60,
     StardustMachineRequestCooldown = 60,
+    StardustMachineNoEventRetrySeconds = 8,
     StardustReadyPrinted = false,
 }
 local ReadyActionLastFiredAt = {}
@@ -1767,17 +1768,22 @@ end
 function Extra.getStardustRequestThrottleRemaining()
     local lastRequest = tonumber(Marker:GetAttribute("StardustMachineLastRequestAt")
         or Marker:GetAttribute("StardustMachineLastRequest")) or 0
-    local remaining = Extra.StardustMachineRequestCooldown - (Workspace:GetServerTimeNow() - lastRequest)
+    local lastEvent = math.max(
+        tonumber(Marker:GetAttribute("FallingStarLastEventAt")) or 0,
+        tonumber(Marker:GetAttribute("FallingStarLastAwardAt")) or 0
+    )
+    local retryDelay = Extra.StardustMachineRequestCooldown
+    if lastRequest > 0 and lastEvent <= lastRequest then
+        retryDelay = Extra.StardustMachineNoEventRetrySeconds
+    end
+
+    Marker:SetAttribute("StardustMachineRetryDelay", retryDelay)
+    local remaining = retryDelay - (Workspace:GetServerTimeNow() - lastRequest)
     return math.max(0, remaining)
 end
 
 local function requestFallingStarBoost()
     if not isStardustMachineReady() then
-        return false
-    end
-
-    if Marker:GetAttribute("StardustMachineReadyConsumed") == true then
-        Marker:SetAttribute("StardustMachineSafeReady", "ready-consumed")
         return false
     end
 
@@ -1801,7 +1807,9 @@ local function requestFallingStarBoost()
         return false
     end
 
-    if not canFireReadyAction("StardustMachine", Extra.StardustMachineRequestCooldown) then
+    local retryDelay = tonumber(Marker:GetAttribute("StardustMachineRetryDelay"))
+        or Extra.StardustMachineRequestCooldown
+    if not canFireReadyAction("StardustMachine", retryDelay) then
         return false
     end
 
@@ -1815,7 +1823,7 @@ local function requestFallingStarBoost()
     local requestTime = Workspace:GetServerTimeNow()
     Marker:SetAttribute("StardustMachineLastRequest", requestTime)
     Marker:SetAttribute("StardustMachineLastRequestAt", requestTime)
-    Marker:SetAttribute("StardustMachineClientThrottleRemaining", Extra.StardustMachineRequestCooldown)
+    Marker:SetAttribute("StardustMachineClientThrottleRemaining", retryDelay)
     Marker:SetAttribute("StardustMachineReadyConsumed", true)
     Marker:SetAttribute("StardustMachineReadyDelayRemaining", 0)
     return true
