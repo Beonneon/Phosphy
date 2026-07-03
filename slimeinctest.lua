@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.16",
+    Version = "1.3.17",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -101,9 +101,7 @@ local Extra = {
     AmuletPickResultHandler = nil,
     AmuletSuppressedConnections = {},
     AmuletVisualConnectionsDisabled = false,
-    StardustMachineReadyDelay = 60,
     StardustMachineRequestCooldown = 60,
-    StardustMachineNoEventRetrySeconds = 8,
     StardustReadyPrinted = false,
 }
 local ReadyActionLastFiredAt = {}
@@ -1721,9 +1719,6 @@ local function isStardustMachineReady()
         Extra.StardustReadyPrinted = false
         Marker:SetAttribute("StardustMachineSafeReady", "no-gui-label")
         Marker:SetAttribute("StardustMachineGuiText", "")
-        Marker:SetAttribute("StardustMachineReadyDetectedAt", 0)
-        Marker:SetAttribute("StardustMachineReadyDelayRemaining", 0)
-        Marker:SetAttribute("StardustMachineReadyConsumed", false)
         return false
     end
 
@@ -1732,9 +1727,6 @@ local function isStardustMachineReady()
     if not guiText:upper():match("^%s*READY!?%s*$") then
         Extra.StardustReadyPrinted = false
         Marker:SetAttribute("StardustMachineSafeReady", "gui-cooldown")
-        Marker:SetAttribute("StardustMachineReadyDetectedAt", 0)
-        Marker:SetAttribute("StardustMachineReadyDelayRemaining", 0)
-        Marker:SetAttribute("StardustMachineReadyConsumed", false)
         return false
     end
 
@@ -1742,24 +1734,18 @@ local function isStardustMachineReady()
     if gui and not gui.Enabled then
         Extra.StardustReadyPrinted = false
         Marker:SetAttribute("StardustMachineSafeReady", "gui-disabled")
-        Marker:SetAttribute("StardustMachineReadyDetectedAt", 0)
-        Marker:SetAttribute("StardustMachineReadyDelayRemaining", 0)
-        Marker:SetAttribute("StardustMachineReadyConsumed", false)
         return false
     end
 
     local remaining = Extra.getStardustCooldownRemaining()
     if remaining == nil or remaining > 0 then
         Extra.StardustReadyPrinted = false
-        Marker:SetAttribute("StardustMachineReadyDetectedAt", 0)
-        Marker:SetAttribute("StardustMachineReadyDelayRemaining", 0)
-        Marker:SetAttribute("StardustMachineReadyConsumed", false)
         return false
     end
 
     if not Extra.StardustReadyPrinted then
         Extra.StardustReadyPrinted = true
-        print("[slimeinc] Stardust machine GUI is READY; waiting before auto fire.")
+        print("[slimeinc] Stardust machine GUI is READY; auto fire enabled.")
     end
 
     return true
@@ -1768,36 +1754,13 @@ end
 function Extra.getStardustRequestThrottleRemaining()
     local lastRequest = tonumber(Marker:GetAttribute("StardustMachineLastRequestAt")
         or Marker:GetAttribute("StardustMachineLastRequest")) or 0
-    local lastEvent = math.max(
-        tonumber(Marker:GetAttribute("FallingStarLastEventAt")) or 0,
-        tonumber(Marker:GetAttribute("FallingStarLastAwardAt")) or 0
-    )
-    local retryDelay = Extra.StardustMachineRequestCooldown
-    if lastRequest > 0 and lastEvent <= lastRequest then
-        retryDelay = Extra.StardustMachineNoEventRetrySeconds
-    end
-
-    Marker:SetAttribute("StardustMachineRetryDelay", retryDelay)
-    local remaining = retryDelay - (Workspace:GetServerTimeNow() - lastRequest)
+    Marker:SetAttribute("StardustMachineRetryDelay", Extra.StardustMachineRequestCooldown)
+    local remaining = Extra.StardustMachineRequestCooldown - (Workspace:GetServerTimeNow() - lastRequest)
     return math.max(0, remaining)
 end
 
 local function requestFallingStarBoost()
     if not isStardustMachineReady() then
-        return false
-    end
-
-    local now = Workspace:GetServerTimeNow()
-    local readyDetectedAt = tonumber(Marker:GetAttribute("StardustMachineReadyDetectedAt")) or 0
-    if readyDetectedAt <= 0 then
-        readyDetectedAt = now
-        Marker:SetAttribute("StardustMachineReadyDetectedAt", readyDetectedAt)
-    end
-
-    local readyDelayRemaining = Extra.StardustMachineReadyDelay - (now - readyDetectedAt)
-    Marker:SetAttribute("StardustMachineReadyDelayRemaining", math.ceil(math.max(0, readyDelayRemaining)))
-    if readyDelayRemaining > 0 then
-        Marker:SetAttribute("StardustMachineSafeReady", "ready-delay")
         return false
     end
 
@@ -1807,9 +1770,7 @@ local function requestFallingStarBoost()
         return false
     end
 
-    local retryDelay = tonumber(Marker:GetAttribute("StardustMachineRetryDelay"))
-        or Extra.StardustMachineRequestCooldown
-    if not canFireReadyAction("StardustMachine", retryDelay) then
+    if not canFireReadyAction("StardustMachine", Extra.StardustMachineRequestCooldown) then
         return false
     end
 
@@ -1823,9 +1784,7 @@ local function requestFallingStarBoost()
     local requestTime = Workspace:GetServerTimeNow()
     Marker:SetAttribute("StardustMachineLastRequest", requestTime)
     Marker:SetAttribute("StardustMachineLastRequestAt", requestTime)
-    Marker:SetAttribute("StardustMachineClientThrottleRemaining", retryDelay)
-    Marker:SetAttribute("StardustMachineReadyConsumed", true)
-    Marker:SetAttribute("StardustMachineReadyDelayRemaining", 0)
+    Marker:SetAttribute("StardustMachineClientThrottleRemaining", Extra.StardustMachineRequestCooldown)
     return true
 end
 
