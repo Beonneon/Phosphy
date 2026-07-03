@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.14",
+    Version = "1.3.15",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -4152,6 +4152,13 @@ function Extra.shouldMatchAnyAmuletMinimumStat()
         and Toggles.ToggleAmuletAnyMinimumStat.Value
 end
 
+function Extra.shouldMatchAmuletRuleGroupsWithOr()
+    return Toggles.ToggleAmuletRulesUseOr
+        and Toggles.ToggleAmuletRulesUseOr.Value
+        and Extra.shouldRequireSelectedAmuletType()
+        and Extra.hasAmuletMinimumStats()
+end
+
 local function compactAmuletValue(value)
     local valueType = typeof(value)
 
@@ -4484,6 +4491,20 @@ local function findSelectedAmuletTarget(options)
     local keys = getOrderedAmuletOptionKeys(options)
     local count = #keys
     if isSelectedAmuletCount(count) then
+        if Extra.shouldMatchAmuletRuleGroupsWithOr() then
+            local typeMatched, targetIndex, typeMissReason = Extra.matchAmuletTypeRules(options, keys)
+            local valueMatched, valueMissReason = Extra.matchAmuletMinimumStats(options, keys)
+            if typeMatched or valueMatched then
+                return count, targetIndex
+            end
+
+            if typeMissReason and valueMissReason then
+                return nil, nil, "rules"
+            end
+
+            return nil, nil, typeMissReason or valueMissReason
+        end
+
         local typeMatched, targetIndex, typeMissReason = Extra.matchAmuletTypeRules(options, keys)
         if not typeMatched then
             return nil, nil, typeMissReason
@@ -4510,6 +4531,8 @@ local function summarizeAmuletRoll(options, rollId, target, targetIndex, missRea
         lines[#lines + 1] = "Roll " .. tostring(rollId or "?") .. " hit selected count, but missed required amulet type."
     elseif missReason == "value" then
         lines[#lines + 1] = "Roll " .. tostring(rollId or "?") .. " hit selected count, but missed minimum combined values."
+    elseif missReason == "rules" then
+        lines[#lines + 1] = "Roll " .. tostring(rollId or "?") .. " hit selected count, but missed combo/type and minimum values."
     else
         lines[#lines + 1] = "Roll " .. tostring(rollId or "?") .. " did not hit a selected option count."
     end
@@ -6062,6 +6085,10 @@ AmuletBox:AddCheckbox("ToggleRequireAmuletType", {
 })
 AmuletBox:AddCheckbox("ToggleRequireAllAmuletTypes", {
     Text = "Selected Types Are Combo",
+    Default = false,
+})
+AmuletBox:AddCheckbox("ToggleAmuletRulesUseOr", {
+    Text = "Combo/Type OR Min Value",
     Default = false,
 })
 AmuletBox:AddCheckbox("ToggleAmuletAnyMinimumStat", {
