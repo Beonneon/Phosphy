@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.13",
+    Version = "1.3.14",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -92,7 +92,7 @@ local Extra = {
     BuffComboFreshTotemExpiresAt = 0,
     BuffComboIgnoredTotems = {},
     AmuletNextRollAt = 0,
-    AmuletPickTimeout = 0.25,
+    AmuletPickTimeout = 0.75,
     AmuletNextRollDelay = 0.12,
     AmuletTargetLocked = false,
     AmuletStatusLastDisplayAt = 0,
@@ -310,6 +310,17 @@ function Extra.amuletVisualSuppressionEnabled()
         or Toggles.ToggleAmuletHideRollVisuals.Value == true
 end
 
+function Extra.autoAmuletRollEnabled()
+    return Toggles.ToggleAutoAmuletRoll
+        and Toggles.ToggleAutoAmuletRoll.Value == true
+end
+
+function Extra.shouldSuppressAmuletRollVisuals()
+    return Extra.amuletVisualSuppressionEnabled()
+        and Extra.autoAmuletRollEnabled()
+        and not Extra.AmuletTargetLocked
+end
+
 function Extra.isOwnAmuletSignalConnection(connection)
     local callback = Extra.getExecutorConnectionCallback(connection)
 
@@ -511,7 +522,7 @@ function Extra.startAmuletVisualCleanup()
     end
 
     Tasks.AmuletVisualCleanup = task.spawn(function()
-        while Extra.amuletVisualSuppressionEnabled() do
+        while Extra.shouldSuppressAmuletRollVisuals() do
             Extra.cleanupAmuletRollVisuals()
             task.wait(0.08)
         end
@@ -521,7 +532,7 @@ function Extra.startAmuletVisualCleanup()
 end
 
 function Extra.refreshAmuletVisualSuppression()
-    if Extra.amuletVisualSuppressionEnabled() then
+    if Extra.shouldSuppressAmuletRollVisuals() then
         if not Extra.AmuletVisualConnectionsDisabled then
             Extra.enableAllAmuletSignalConnections()
         end
@@ -4595,10 +4606,11 @@ pickLatestAmulet = function(choice, quiet)
 
         AmuletPickPending = false
         if choice == "OLD" and not Extra.AmuletTargetLocked and LatestAmuletTarget == nil then
-            AmuletChoicePending = false
             Extra.AmuletNextRollAt = os.clock() + Extra.AmuletNextRollDelay
-            if Extra.amuletVisualSuppressionEnabled() then
+            if Extra.shouldSuppressAmuletRollVisuals() then
                 Extra.queueAmuletRollVisualCleanup()
+            elseif not Extra.autoAmuletRollEnabled() then
+                setAmuletStatus(LatestAmuletSummary, true)
             end
         end
     end)
@@ -4632,7 +4644,7 @@ local function connectAmuletEvents()
         Extra.AmuletTargetLocked = target ~= nil
         setAmuletStatus(
             summarizeAmuletRoll(options, rollId, target, targetIndex, missReason),
-            target ~= nil or not (Toggles.ToggleAutoAmuletRoll and Toggles.ToggleAutoAmuletRoll.Value)
+            true
         )
 
         Marker:SetAttribute("AmuletLastRollId", tostring(rollId))
@@ -4653,12 +4665,8 @@ local function connectAmuletEvents()
             return
         end
 
-        if Extra.amuletVisualSuppressionEnabled() then
+        if Extra.shouldSuppressAmuletRollVisuals() then
             Extra.queueAmuletRollVisualCleanup()
-        end
-
-        if Toggles.ToggleAutoAmuletRoll and Toggles.ToggleAutoAmuletRoll.Value then
-            pickLatestAmulet("OLD", true)
         end
     end
 
@@ -4689,7 +4697,7 @@ local function connectAmuletEvents()
             end
         end
 
-        if Extra.amuletVisualSuppressionEnabled() then
+        if Extra.shouldSuppressAmuletRollVisuals() then
             Extra.queueAmuletRollVisualCleanup()
         end
 
@@ -4713,7 +4721,10 @@ rollAmuletOnce = function()
     end
 
     if AmuletChoicePending then
-        if not AmuletPickPending and not Extra.AmuletTargetLocked and LatestAmuletTarget == nil then
+        if Extra.autoAmuletRollEnabled()
+            and not AmuletPickPending
+            and not Extra.AmuletTargetLocked
+            and LatestAmuletTarget == nil then
             pickLatestAmulet("OLD", true)
         end
         return false
@@ -4741,7 +4752,11 @@ rollAmuletOnce = function()
     local rollStartedAt = Extra.AmuletRollPendingAt
     remote:FireServer()
     Marker:SetAttribute("AmuletRolledAt", Workspace:GetServerTimeNow())
-    setAmuletStatus("Rolling amulet...", true)
+    if not Extra.autoAmuletRollEnabled() or LatestAmuletRollId == nil then
+        setAmuletStatus("Rolling amulet...", true)
+    else
+        Marker:SetAttribute("AmuletRollState", "rolling")
+    end
 
     task.delay(3, function()
         if AmuletRollPending and Extra.AmuletRollPendingAt == rollStartedAt then
@@ -6435,6 +6450,8 @@ Toggles.ToggleAutoAmuletRoll:OnChanged(function(state)
         startAutoAmuletRoll()
     else
         stopTask("AutoAmuletRoll")
+        Extra.refreshAmuletVisualSuppression()
+        setAmuletStatus(LatestAmuletSummary, true)
     end
 end)
 Toggles.ToggleAmuletHideRollVisuals:OnChanged(function()
