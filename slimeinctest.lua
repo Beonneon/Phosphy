@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.18",
+    Version = "1.3.19",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -738,18 +738,6 @@ local function getRoombaRollResultRemote() return getRemote("RoombaRollResult", 
 local function getActivateStardustMachineRemote() return getRemote("ActivateStardustMachine", 10) end
 local function getStardustStarFallingRemote() return getRemote("StardustStarFalling", 10) end
 local function getFallingStarAwardedRemote() return getRemote("FallingStarAwarded", 10) end
-local function getRequestBossStateRemote() return getRemote("RequestBossState", 5) end
-local function getBossStateChangedRemote() return getRemote("BossStateChanged", 5) end
-local function getBossSpawnRequestedRemote() return getRemote("BossSpawnRequested", 5) end
-local function getBossSpawnResultRemote() return getRemote("BossSpawnResult", 5) end
-local function getBossEarlyStartRequestedRemote() return getRemote("BossEarlyStartRequested", 5) end
-local function getBossParrySequenceRemote() return getRemote("BossParrySequence", 5) end
-local function getBossParryAttemptRemote() return getRemote("BossParryAttempt", 5) end
-local function getBossParryResultRemote() return getRemote("BossParryResult", 5) end
-local function getBossSplitPickupSpawnedRemote() return getRemote("BossSplitPickupSpawned", 5) end
-local function getBossSplitPickupCollectedRemote() return getRemote("BossSplitPickupCollected", 5) end
-local function getBossVictoryRewardsRemote() return getRemote("BossVictoryRewards", 5) end
-local function getBossVictoryClosedRemote() return getRemote("BossVictoryClosed", 5) end
 
 local function getSlimesFolder()
     local runtime = Workspace:FindFirstChild("Runtime") or Workspace:WaitForChild("Runtime", 10)
@@ -1904,6 +1892,7 @@ local function refreshFallingStarAutomation()
     end
 end
 
+do
 local BossAutomationConfig = {
     unlockPrestige = 1,
     spawnCostAmount = 2500,
@@ -1914,6 +1903,10 @@ local BossAutomationConfig = {
     bossTeleportEnterPath = { "World", "BossRelated", "BossTeleport", "Enter" },
     bossTeleportGoalPath = { "World", "BossRelated", "BossTeleport", "Goal" },
 }
+
+local function getBossRemote(name)
+    return getRemote(name, 5)
+end
 
 local function bossFindChildLoose(parent, name)
     if not parent then
@@ -2106,7 +2099,7 @@ function Extra.requestBossState(force)
         return false
     end
 
-    local remote = getRequestBossStateRemote()
+    local remote = getBossRemote("RequestBossState")
     if not remote then
         Extra.setBossStatus("RequestBossState remote was not found.")
         return false
@@ -2236,8 +2229,8 @@ function Extra.fireBossStart(force)
     end
 
     local power = profile and tonumber(profile.power) or nil
-    local earlyRemote = getBossEarlyStartRequestedRemote()
-    local spawnRemote = getBossSpawnRequestedRemote()
+    local earlyRemote = getBossRemote("BossEarlyStartRequested")
+    local spawnRemote = getBossRemote("BossSpawnRequested")
     local remote = nil
     local remoteName = nil
 
@@ -2302,7 +2295,7 @@ function Extra.handleBossParrySequence(payload)
                             return
                         end
 
-                        local remote = getBossParryAttemptRemote()
+                        local remote = getBossRemote("BossParryAttempt")
                         if remote then
                             remote:FireServer(math.floor(sequence), math.floor(promptId))
                             Marker:SetAttribute("BossLastParryAttempt", key)
@@ -2343,7 +2336,7 @@ function Extra.collectBossSplitPickup(payload)
         task.wait(0.15)
     end
 
-    local remote = getBossSplitPickupCollectedRemote()
+    local remote = getBossRemote("BossSplitPickupCollected")
     if not remote then
         Extra.setBossStatus("BossSplitPickupCollected remote was not found.")
         return false
@@ -2356,22 +2349,26 @@ function Extra.collectBossSplitPickup(payload)
     return true
 end
 
-local function connectBossEvents()
+function Extra.disconnectBossEvents()
     disconnect("BossStateChanged")
     disconnect("BossSpawnResult")
     disconnect("BossParrySequence")
     disconnect("BossParryResult")
     disconnect("BossSplitPickupSpawned")
     disconnect("BossVictoryRewards")
+end
 
-    local stateRemote = getBossStateChangedRemote()
+function Extra.connectBossEvents()
+    Extra.disconnectBossEvents()
+
+    local stateRemote = getBossRemote("BossStateChanged")
     if stateRemote then
         Connections.BossStateChanged = stateRemote.OnClientEvent:Connect(function(payload)
             Extra.applyBossState(payload)
         end)
     end
 
-    local spawnResultRemote = getBossSpawnResultRemote()
+    local spawnResultRemote = getBossRemote("BossSpawnResult")
     if spawnResultRemote then
         Connections.BossSpawnResult = spawnResultRemote.OnClientEvent:Connect(function(ok, reason)
             if ok then
@@ -2383,14 +2380,14 @@ local function connectBossEvents()
         end)
     end
 
-    local parrySequenceRemote = getBossParrySequenceRemote()
+    local parrySequenceRemote = getBossRemote("BossParrySequence")
     if parrySequenceRemote then
         Connections.BossParrySequence = parrySequenceRemote.OnClientEvent:Connect(function(payload)
             Extra.handleBossParrySequence(payload)
         end)
     end
 
-    local parryResultRemote = getBossParryResultRemote()
+    local parryResultRemote = getBossRemote("BossParryResult")
     if parryResultRemote then
         Connections.BossParryResult = parryResultRemote.OnClientEvent:Connect(function(promptId, hit, reason)
             Marker:SetAttribute("BossLastParryResultPrompt", tostring(promptId))
@@ -2399,14 +2396,14 @@ local function connectBossEvents()
         end)
     end
 
-    local pickupRemote = getBossSplitPickupSpawnedRemote()
+    local pickupRemote = getBossRemote("BossSplitPickupSpawned")
     if pickupRemote then
         Connections.BossSplitPickupSpawned = pickupRemote.OnClientEvent:Connect(function(payload)
             task.spawn(Extra.collectBossSplitPickup, payload)
         end)
     end
 
-    local victoryRemote = getBossVictoryRewardsRemote()
+    local victoryRemote = getBossRemote("BossVictoryRewards")
     if victoryRemote then
         Connections.BossVictoryRewards = victoryRemote.OnClientEvent:Connect(function(...)
             Marker:SetAttribute("BossLastVictoryAt", Workspace:GetServerTimeNow())
@@ -2414,7 +2411,7 @@ local function connectBossEvents()
             Extra.setBossStatus("Boss victory rewards received.")
             if Toggles.ToggleAutoBossCloseVictory and Toggles.ToggleAutoBossCloseVictory.Value then
                 task.delay(1, function()
-                    local closeRemote = getBossVictoryClosedRemote()
+                    local closeRemote = getBossRemote("BossVictoryClosed")
                     if closeRemote then
                         closeRemote:FireServer()
                         Marker:SetAttribute("BossVictoryClosedAt", Workspace:GetServerTimeNow())
@@ -2425,9 +2422,9 @@ local function connectBossEvents()
     end
 end
 
-local function startAutoBossLoop()
+function Extra.startAutoBossLoop()
     stopTask("AutoBoss")
-    connectBossEvents()
+    Extra.connectBossEvents()
     Extra.requestBossState(true)
 
     Tasks.AutoBoss = task.spawn(function()
@@ -2450,21 +2447,22 @@ local function startAutoBossLoop()
     end)
 end
 
-local function stopAutoBossLoop()
+function Extra.stopAutoBossLoop()
     stopTask("AutoBoss")
+    Extra.disconnectBossEvents()
     Extra.BossMoveCFrame = nil
     Extra.BossMoveUntil = 0
     Extra.BossMoveReason = nil
     Extra.setBossStatus("Auto Boss is off. " .. Extra.describeBossState())
 end
 
-local function refreshAutoBoss()
+function Extra.refreshAutoBoss()
     if Extra.bossAutomationEnabled() then
-        startAutoBossLoop()
+        Extra.startAutoBossLoop()
     else
-        connectBossEvents()
-        stopAutoBossLoop()
+        Extra.stopAutoBossLoop()
     end
+end
 end
 
 local function fireGodlyOrbClaim(count, delaySeconds)
@@ -6813,7 +6811,7 @@ BossBox:AddSlider("AutoBossParryOffsetMs", {
 BossBox:AddButton({
     Text = "Refresh Boss State",
     Func = function()
-        connectBossEvents()
+        Extra.connectBossEvents()
         notify("Boss state requested: " .. tostring(Extra.requestBossState(true)))
     end,
 })
@@ -6821,7 +6819,7 @@ BossBox:AddButton({
     Text = "Start Boss Once",
     Func = function()
         task.spawn(function()
-            connectBossEvents()
+            Extra.connectBossEvents()
             notify("Boss start fired: " .. tostring(Extra.fireBossStart(true)))
         end)
     end,
@@ -7156,14 +7154,14 @@ Toggles.ToggleAutoCollectFallingStars:OnChanged(function()
     refreshFallingStarAutomation()
 end)
 Toggles.ToggleAutoBossStart:OnChanged(function()
-    refreshAutoBoss()
+    Extra.refreshAutoBoss()
 end)
 Toggles.ToggleAutoBossFight:OnChanged(function()
-    refreshAutoBoss()
+    Extra.refreshAutoBoss()
 end)
 Toggles.ToggleAutoBossMove:OnChanged(function(state)
     if state then
-        refreshAutoBoss()
+        Extra.refreshAutoBoss()
     else
         Extra.BossMoveCFrame = nil
         Extra.BossMoveUntil = 0
@@ -7172,12 +7170,12 @@ Toggles.ToggleAutoBossMove:OnChanged(function(state)
 end)
 Toggles.ToggleAutoBossParry:OnChanged(function()
     if Extra.bossAutomationEnabled() then
-        refreshAutoBoss()
+        Extra.refreshAutoBoss()
     end
 end)
 Toggles.ToggleAutoBossSplitPickups:OnChanged(function()
     if Extra.bossAutomationEnabled() then
-        refreshAutoBoss()
+        Extra.refreshAutoBoss()
     end
 end)
 Toggles.ToggleAutoGemStorm:OnChanged(function(state)
@@ -7398,9 +7396,7 @@ if Toggles.ToggleAutoFallingStars.Value or Toggles.ToggleAutoCollectFallingStars
     startFallingStarAutomation()
 end
 if Extra.bossAutomationEnabled() then
-    startAutoBossLoop()
-else
-    connectBossEvents()
+    Extra.startAutoBossLoop()
 end
 if Toggles.ToggleAutoGemStorm.Value then
     startGemStormLoop()
