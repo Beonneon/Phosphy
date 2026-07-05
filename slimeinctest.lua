@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.17",
+    Version = "1.3.18",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -80,6 +80,19 @@ local Extra = {
     RemoteRoot = nil,
     CleanbotRollPending = false,
     CleanbotRollSerial = 0,
+    BossState = {
+        status = "unknown",
+        health = 0,
+        maxHealth = 0,
+    },
+    BossLastStateRequestAt = 0,
+    BossLastStartRequestAt = 0,
+    BossMoveCFrame = nil,
+    BossMoveUntil = 0,
+    BossMoveReason = nil,
+    BossParrySent = {},
+    BossSplitPickups = {},
+    BossStatusLabel = nil,
     SpawnIdQueue = {},
     SpawnIdQueued = {},
     AutoMidasGoldCount = 0,
@@ -725,6 +738,18 @@ local function getRoombaRollResultRemote() return getRemote("RoombaRollResult", 
 local function getActivateStardustMachineRemote() return getRemote("ActivateStardustMachine", 10) end
 local function getStardustStarFallingRemote() return getRemote("StardustStarFalling", 10) end
 local function getFallingStarAwardedRemote() return getRemote("FallingStarAwarded", 10) end
+local function getRequestBossStateRemote() return getRemote("RequestBossState", 5) end
+local function getBossStateChangedRemote() return getRemote("BossStateChanged", 5) end
+local function getBossSpawnRequestedRemote() return getRemote("BossSpawnRequested", 5) end
+local function getBossSpawnResultRemote() return getRemote("BossSpawnResult", 5) end
+local function getBossEarlyStartRequestedRemote() return getRemote("BossEarlyStartRequested", 5) end
+local function getBossParrySequenceRemote() return getRemote("BossParrySequence", 5) end
+local function getBossParryAttemptRemote() return getRemote("BossParryAttempt", 5) end
+local function getBossParryResultRemote() return getRemote("BossParryResult", 5) end
+local function getBossSplitPickupSpawnedRemote() return getRemote("BossSplitPickupSpawned", 5) end
+local function getBossSplitPickupCollectedRemote() return getRemote("BossSplitPickupCollected", 5) end
+local function getBossVictoryRewardsRemote() return getRemote("BossVictoryRewards", 5) end
+local function getBossVictoryClosedRemote() return getRemote("BossVictoryClosed", 5) end
 
 local function getSlimesFolder()
     local runtime = Workspace:FindFirstChild("Runtime") or Workspace:WaitForChild("Runtime", 10)
@@ -812,6 +837,17 @@ local function getPriorityMovementTarget()
     if PalCollectionActive then
         return nil, "Collecting Pals"
     end
+
+    if Extra.BossMoveCFrame and os.clock() <= (Extra.BossMoveUntil or 0)
+        and Toggles.ToggleAutoBossMove and Toggles.ToggleAutoBossMove.Value
+        and ((Toggles.ToggleAutoBossFight and Toggles.ToggleAutoBossFight.Value)
+        or (Toggles.ToggleAutoBossStart and Toggles.ToggleAutoBossStart.Value)) then
+        return Extra.BossMoveCFrame, Extra.BossMoveReason or "Boss"
+    end
+
+    Extra.BossMoveCFrame = nil
+    Extra.BossMoveUntil = 0
+    Extra.BossMoveReason = nil
 
     if FallingStarMovePosition and os.clock() <= FallingStarMoveUntil then
         return CFrame.new(FallingStarMovePosition + Vector3.new(0, 3, 0)), "Falling Star"
@@ -1865,6 +1901,569 @@ local function refreshFallingStarAutomation()
         startFallingStarAutomation()
     else
         stopFallingStarAutomation()
+    end
+end
+
+local BossAutomationConfig = {
+    unlockPrestige = 1,
+    spawnCostAmount = 2500,
+    earlyStartCostAmount = 8000,
+    activeBossName = "ActiveBoss",
+    bossZonePath = { "World", "BossRelated", "BossZone" },
+    bossSpawnPath = { "World", "BossRelated", "BossSpawn" },
+    bossTeleportEnterPath = { "World", "BossRelated", "BossTeleport", "Enter" },
+    bossTeleportGoalPath = { "World", "BossRelated", "BossTeleport", "Goal" },
+}
+
+local function bossFindChildLoose(parent, name)
+    if not parent then
+        return nil
+    end
+
+    local found = parent:FindFirstChild(name)
+    if found then
+        return found
+    end
+
+    local wanted = tostring(name):lower()
+    for _, child in ipairs(parent:GetChildren()) do
+        if tostring(child.Name):lower() == wanted then
+            return child
+        end
+    end
+
+    return nil
+end
+
+local function bossFindDescendantLoose(root, name)
+    if not root then
+        return nil
+    end
+
+    local found = root:FindFirstChild(name, true)
+    if found then
+        return found
+    end
+
+    local wanted = tostring(name):lower()
+    for _, descendant in ipairs(root:GetDescendants()) do
+        if tostring(descendant.Name):lower() == wanted then
+            return descendant
+        end
+    end
+
+    return nil
+end
+
+local function bossFindPath(root, path)
+    local current = root
+    for _, name in ipairs(path) do
+        current = bossFindChildLoose(current, name)
+        if not current then
+            return nil
+        end
+    end
+
+    return current
+end
+
+local function bossResolvePath(path, fallbackName)
+    local found = bossFindPath(Workspace, path)
+    if found then
+        return found
+    end
+
+    local bossRelated = bossFindDescendantLoose(Workspace, "BossRelated")
+    if bossRelated and fallbackName then
+        found = bossFindDescendantLoose(bossRelated, fallbackName)
+        if found then
+            return found
+        end
+    end
+
+    if fallbackName then
+        return bossFindDescendantLoose(Workspace, fallbackName)
+    end
+
+    return nil
+end
+
+local function bossInstanceCFrame(instance)
+    if typeof(instance) ~= "Instance" then
+        return nil
+    end
+
+    if instance:IsA("Attachment") then
+        return instance.WorldCFrame
+    end
+
+    return Extra.instanceCFrame(instance)
+end
+
+local function bossOffsetCFrame(cframe, yOffset)
+    if typeof(cframe) ~= "CFrame" then
+        return nil
+    end
+
+    return cframe + Vector3.new(0, yOffset or 0, 0)
+end
+
+function Extra.bossAutomationEnabled()
+    return (Toggles.ToggleAutoBossStart and Toggles.ToggleAutoBossStart.Value)
+        or (Toggles.ToggleAutoBossFight and Toggles.ToggleAutoBossFight.Value)
+end
+
+function Extra.bossFightEnabled()
+    return Toggles.ToggleAutoBossFight and Toggles.ToggleAutoBossFight.Value or false
+end
+
+function Extra.bossMoveEnabled()
+    return Toggles.ToggleAutoBossMove and Toggles.ToggleAutoBossMove.Value
+        and ((Toggles.ToggleAutoBossStart and Toggles.ToggleAutoBossStart.Value) or Extra.bossFightEnabled())
+end
+
+function Extra.bossParryEnabled()
+    return Extra.bossFightEnabled()
+        and Toggles.ToggleAutoBossParry
+        and Toggles.ToggleAutoBossParry.Value
+end
+
+function Extra.bossSplitPickupEnabled()
+    return Extra.bossFightEnabled()
+        and Toggles.ToggleAutoBossSplitPickups
+        and Toggles.ToggleAutoBossSplitPickups.Value
+end
+
+function Extra.setBossStatus(message)
+    local text = tostring(message)
+    Marker:SetAttribute("BossAutomationStatus", text)
+    if Extra.BossStatusLabel then
+        pcall(function()
+            Extra.BossStatusLabel:SetText(text)
+        end)
+    end
+end
+
+function Extra.describeBossState()
+    local state = Extra.BossState or {}
+    local status = tostring(state.status or "unknown")
+    local health = tonumber(state.health) or 0
+    local maxHealth = tonumber(state.maxHealth) or 0
+
+    if status == "active" and maxHealth > 0 then
+        return string.format("Boss active: %d/%d HP.", math.floor(health), math.floor(maxHealth))
+    end
+
+    if status == "spawning" then
+        local entryClosesAt = tonumber(state.entryClosesAt)
+        if entryClosesAt then
+            local remaining = math.max(0, math.ceil(entryClosesAt - Workspace:GetServerTimeNow()))
+            return "Boss portal/spawn active. Entry window: " .. tostring(remaining) .. "s."
+        end
+        return "Boss is spawning."
+    end
+
+    if status == "inactive" then
+        return "Boss inactive."
+    end
+
+    return "Boss state: " .. status .. "."
+end
+
+function Extra.applyBossState(payload)
+    if typeof(payload) ~= "table" then
+        return false
+    end
+
+    local status = payload.status
+    local health = payload.health
+    local maxHealth = payload.maxHealth
+    if typeof(status) ~= "string" or typeof(health) ~= "number" or typeof(maxHealth) ~= "number" then
+        return false
+    end
+
+    Extra.BossState = {
+        status = status,
+        health = health,
+        maxHealth = maxHealth,
+        spawnStartedAt = typeof(payload.spawnStartedAt) == "number" and payload.spawnStartedAt or nil,
+        spawnedByUserId = typeof(payload.spawnedByUserId) == "number" and payload.spawnedByUserId or nil,
+        spawnCFrame = typeof(payload.spawnCFrame) == "CFrame" and payload.spawnCFrame or nil,
+        entryClosesAt = typeof(payload.entryClosesAt) == "number" and payload.entryClosesAt or nil,
+    }
+
+    Marker:SetAttribute("BossStatus", status)
+    Marker:SetAttribute("BossHealth", health)
+    Marker:SetAttribute("BossMaxHealth", maxHealth)
+    Marker:SetAttribute("BossEntryClosesAt", Extra.BossState.entryClosesAt or 0)
+    Extra.setBossStatus(Extra.describeBossState())
+    return true
+end
+
+function Extra.requestBossState(force)
+    local now = os.clock()
+    if not force and now - (Extra.BossLastStateRequestAt or 0) < 5 then
+        return false
+    end
+
+    local remote = getRequestBossStateRemote()
+    if not remote then
+        Extra.setBossStatus("RequestBossState remote was not found.")
+        return false
+    end
+
+    Extra.BossLastStateRequestAt = now
+    Marker:SetAttribute("BossLastStateRequest", Workspace:GetServerTimeNow())
+    remote:FireServer()
+    return true
+end
+
+function Extra.getBossRelated()
+    return bossResolvePath({ "World", "BossRelated" }, "BossRelated")
+end
+
+function Extra.getActiveBossInstance()
+    local bossRelated = Extra.getBossRelated()
+    local activeName = BossAutomationConfig.activeBossName
+    if bossRelated then
+        return bossFindChildLoose(bossRelated, activeName) or bossFindDescendantLoose(bossRelated, activeName)
+    end
+
+    return bossFindDescendantLoose(Workspace, activeName)
+end
+
+function Extra.getBossStartCFrame()
+    local enter = bossResolvePath(BossAutomationConfig.bossTeleportEnterPath, "Enter")
+    local enterCFrame = bossInstanceCFrame(enter)
+    if enterCFrame then
+        return bossOffsetCFrame(enterCFrame, 3)
+    end
+
+    local spawn = bossResolvePath(BossAutomationConfig.bossSpawnPath, "BossSpawn")
+    local spawnCFrame = bossInstanceCFrame(spawn)
+    if spawnCFrame then
+        return bossOffsetCFrame(spawnCFrame, 3)
+    end
+
+    local state = Extra.BossState or {}
+    if typeof(state.spawnCFrame) == "CFrame" then
+        return bossOffsetCFrame(state.spawnCFrame, 3)
+    end
+
+    return nil
+end
+
+function Extra.getBossFightCFrame()
+    local goal = bossResolvePath(BossAutomationConfig.bossTeleportGoalPath, "Goal")
+    local goalCFrame = bossInstanceCFrame(goal)
+    if goalCFrame then
+        return bossOffsetCFrame(goalCFrame, 3)
+    end
+
+    local zone = bossResolvePath(BossAutomationConfig.bossZonePath, "BossZone")
+    local zoneCFrame = bossInstanceCFrame(zone)
+    if zoneCFrame then
+        return bossOffsetCFrame(zoneCFrame, 3)
+    end
+
+    local activeBoss = Extra.getActiveBossInstance()
+    local activeCFrame = bossInstanceCFrame(activeBoss)
+    if activeCFrame then
+        return bossOffsetCFrame(activeCFrame, 8)
+    end
+
+    return Extra.getBossStartCFrame()
+end
+
+function Extra.setBossMoveTarget(cframe, holdSeconds, reason)
+    if typeof(cframe) ~= "CFrame" then
+        return false
+    end
+
+    Extra.BossMoveCFrame = cframe
+    Extra.BossMoveUntil = os.clock() + math.max(0.25, tonumber(holdSeconds) or 0.75)
+    Extra.BossMoveReason = reason or "Boss"
+
+    local root = getRoot()
+    if root then
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+        root.CFrame = cframe
+    end
+
+    return true
+end
+
+function Extra.updateBossMovementTarget(reason, holdSeconds)
+    if not Extra.bossMoveEnabled() then
+        return false
+    end
+
+    local state = Extra.BossState or {}
+    local target
+    if state.status == "active" or state.status == "spawning" then
+        target = Extra.getBossFightCFrame()
+    else
+        target = Extra.getBossStartCFrame()
+    end
+
+    return Extra.setBossMoveTarget(target, holdSeconds or 1.25, reason or "Boss")
+end
+
+function Extra.fireBossStart(force)
+    local state = Extra.BossState or {}
+    if state.status == "active" then
+        Extra.setBossStatus("Boss is already active.")
+        return false
+    end
+    if state.status == "spawning" then
+        Extra.updateBossMovementTarget("Boss Entry", 2)
+        Extra.setBossStatus(Extra.describeBossState())
+        return false
+    end
+
+    local now = os.clock()
+    local retrySeconds = math.max(10, getNumberOption("AutoBossStartRetrySeconds", 60))
+    if not force and now - (Extra.BossLastStartRequestAt or 0) < retrySeconds then
+        return false
+    end
+
+    local profile = getProfileData()
+    local prestige = profile and tonumber(profile.prestige) or nil
+    if prestige and prestige < BossAutomationConfig.unlockPrestige then
+        Extra.setBossStatus("Prestige 1 required for boss.")
+        return false
+    end
+
+    local power = profile and tonumber(profile.power) or nil
+    local earlyRemote = getBossEarlyStartRequestedRemote()
+    local spawnRemote = getBossSpawnRequestedRemote()
+    local remote = nil
+    local remoteName = nil
+
+    if earlyRemote and (not power or power >= BossAutomationConfig.earlyStartCostAmount) then
+        remote = earlyRemote
+        remoteName = "BossEarlyStartRequested"
+    elseif spawnRemote and (not power or power >= BossAutomationConfig.spawnCostAmount) then
+        remote = spawnRemote
+        remoteName = "BossSpawnRequested"
+    end
+
+    if not remote then
+        if earlyRemote and power then
+            Extra.setBossStatus("Need " .. tostring(BossAutomationConfig.earlyStartCostAmount) .. " power for early boss start.")
+        else
+            Extra.setBossStatus("Boss start remote was not found.")
+        end
+        return false
+    end
+
+    if Extra.bossMoveEnabled() then
+        Extra.updateBossMovementTarget("Boss Start", 1.5)
+        task.wait(0.12)
+    end
+
+    Extra.BossLastStartRequestAt = now
+    Marker:SetAttribute("BossLastStartRemote", remoteName)
+    Marker:SetAttribute("BossLastStartRequest", Workspace:GetServerTimeNow())
+    remote:FireServer()
+    Extra.setBossStatus("Boss start fired with " .. remoteName .. ".")
+    return true
+end
+
+function Extra.handleBossParrySequence(payload)
+    if not Extra.bossParryEnabled() or typeof(payload) ~= "table" then
+        return false
+    end
+
+    local sequence = tonumber(payload.sequence)
+    local prompts = payload.prompts
+    if not sequence or typeof(prompts) ~= "table" then
+        return false
+    end
+
+    local scheduled = 0
+    local offsetSeconds = math.clamp(getNumberOption("AutoBossParryOffsetMs", 50) / 1000, 0, 0.2)
+    for _, prompt in pairs(prompts) do
+        if typeof(prompt) == "table" then
+            local promptId = tonumber(prompt.promptId)
+            local expiresAt = tonumber(prompt.expiresAt)
+            local targetAt = tonumber(prompt.parryStartAt) or tonumber(prompt.activeAt) or tonumber(prompt.startAt)
+            if promptId and expiresAt and targetAt and Workspace:GetServerTimeNow() < expiresAt then
+                local key = tostring(math.floor(sequence)) .. ":" .. tostring(math.floor(promptId))
+                if not Extra.BossParrySent[key] then
+                    Extra.BossParrySent[key] = true
+                    scheduled += 1
+                    task.delay(math.max(0, targetAt - Workspace:GetServerTimeNow() + offsetSeconds), function()
+                        if not Extra.bossParryEnabled() then
+                            return
+                        end
+                        if Workspace:GetServerTimeNow() > expiresAt + 0.08 then
+                            return
+                        end
+
+                        local remote = getBossParryAttemptRemote()
+                        if remote then
+                            remote:FireServer(math.floor(sequence), math.floor(promptId))
+                            Marker:SetAttribute("BossLastParryAttempt", key)
+                            Marker:SetAttribute("BossLastParryAttemptAt", Workspace:GetServerTimeNow())
+                        end
+                    end)
+                end
+            end
+        end
+    end
+
+    if scheduled > 0 then
+        Extra.setBossStatus("Scheduled " .. tostring(scheduled) .. " boss parry attempt(s).")
+    end
+    return scheduled > 0
+end
+
+function Extra.collectBossSplitPickup(payload)
+    if not Extra.bossSplitPickupEnabled() or typeof(payload) ~= "table" then
+        return false
+    end
+
+    local pickupId = tonumber(payload.pickupId)
+    if not pickupId then
+        return false
+    end
+
+    pickupId = math.floor(pickupId)
+    local now = os.clock()
+    if now - (Extra.BossSplitPickups[pickupId] or 0) < 0.75 then
+        return false
+    end
+
+    Extra.BossSplitPickups[pickupId] = now
+    local position = payloadToPosition(payload.position or payload)
+    if position and Extra.bossMoveEnabled() then
+        Extra.setBossMoveTarget(CFrame.new(position + Vector3.new(0, 3, 0)), 1, "Boss Split Pickup")
+        task.wait(0.15)
+    end
+
+    local remote = getBossSplitPickupCollectedRemote()
+    if not remote then
+        Extra.setBossStatus("BossSplitPickupCollected remote was not found.")
+        return false
+    end
+
+    remote:FireServer(pickupId)
+    Marker:SetAttribute("BossLastSplitPickup", pickupId)
+    Marker:SetAttribute("BossLastSplitPickupAt", Workspace:GetServerTimeNow())
+    Extra.setBossStatus("Boss split pickup collected: " .. tostring(pickupId) .. ".")
+    return true
+end
+
+local function connectBossEvents()
+    disconnect("BossStateChanged")
+    disconnect("BossSpawnResult")
+    disconnect("BossParrySequence")
+    disconnect("BossParryResult")
+    disconnect("BossSplitPickupSpawned")
+    disconnect("BossVictoryRewards")
+
+    local stateRemote = getBossStateChangedRemote()
+    if stateRemote then
+        Connections.BossStateChanged = stateRemote.OnClientEvent:Connect(function(payload)
+            Extra.applyBossState(payload)
+        end)
+    end
+
+    local spawnResultRemote = getBossSpawnResultRemote()
+    if spawnResultRemote then
+        Connections.BossSpawnResult = spawnResultRemote.OnClientEvent:Connect(function(ok, reason)
+            if ok then
+                Extra.setBossStatus("Boss start accepted.")
+            else
+                Extra.setBossStatus("Boss start denied: " .. tostring(reason or "unknown"))
+            end
+            Extra.requestBossState(true)
+        end)
+    end
+
+    local parrySequenceRemote = getBossParrySequenceRemote()
+    if parrySequenceRemote then
+        Connections.BossParrySequence = parrySequenceRemote.OnClientEvent:Connect(function(payload)
+            Extra.handleBossParrySequence(payload)
+        end)
+    end
+
+    local parryResultRemote = getBossParryResultRemote()
+    if parryResultRemote then
+        Connections.BossParryResult = parryResultRemote.OnClientEvent:Connect(function(promptId, hit, reason)
+            Marker:SetAttribute("BossLastParryResultPrompt", tostring(promptId))
+            Marker:SetAttribute("BossLastParryResultHit", hit == true)
+            Marker:SetAttribute("BossLastParryResultReason", tostring(reason or ""))
+        end)
+    end
+
+    local pickupRemote = getBossSplitPickupSpawnedRemote()
+    if pickupRemote then
+        Connections.BossSplitPickupSpawned = pickupRemote.OnClientEvent:Connect(function(payload)
+            task.spawn(Extra.collectBossSplitPickup, payload)
+        end)
+    end
+
+    local victoryRemote = getBossVictoryRewardsRemote()
+    if victoryRemote then
+        Connections.BossVictoryRewards = victoryRemote.OnClientEvent:Connect(function(...)
+            Marker:SetAttribute("BossLastVictoryAt", Workspace:GetServerTimeNow())
+            Marker:SetAttribute("BossLastVictoryArgs", select("#", ...))
+            Extra.setBossStatus("Boss victory rewards received.")
+            if Toggles.ToggleAutoBossCloseVictory and Toggles.ToggleAutoBossCloseVictory.Value then
+                task.delay(1, function()
+                    local closeRemote = getBossVictoryClosedRemote()
+                    if closeRemote then
+                        closeRemote:FireServer()
+                        Marker:SetAttribute("BossVictoryClosedAt", Workspace:GetServerTimeNow())
+                    end
+                end)
+            end
+        end)
+    end
+end
+
+local function startAutoBossLoop()
+    stopTask("AutoBoss")
+    connectBossEvents()
+    Extra.requestBossState(true)
+
+    Tasks.AutoBoss = task.spawn(function()
+        while Marker:GetAttribute("Session") == Session and Extra.bossAutomationEnabled() do
+            Extra.requestBossState(false)
+
+            if Toggles.ToggleAutoBossStart and Toggles.ToggleAutoBossStart.Value then
+                Extra.fireBossStart(false)
+            end
+
+            if Extra.bossMoveEnabled() then
+                local status = Extra.BossState and Extra.BossState.status or "unknown"
+                if status == "active" or status == "spawning" then
+                    Extra.updateBossMovementTarget("Boss Arena", 1.5)
+                end
+            end
+
+            task.wait(1)
+        end
+    end)
+end
+
+local function stopAutoBossLoop()
+    stopTask("AutoBoss")
+    Extra.BossMoveCFrame = nil
+    Extra.BossMoveUntil = 0
+    Extra.BossMoveReason = nil
+    Extra.setBossStatus("Auto Boss is off. " .. Extra.describeBossState())
+end
+
+local function refreshAutoBoss()
+    if Extra.bossAutomationEnabled() then
+        startAutoBossLoop()
+    else
+        connectBossEvents()
+        stopAutoBossLoop()
     end
 end
 
@@ -6194,6 +6793,68 @@ FallingStarBox:AddCheckbox("ToggleAutoCollectFallingStars", {
     Default = true,
 })
 
+local BossBox = Tabs.Automation:AddRightGroupbox("Boss", "swords")
+BossBox:AddSlider("AutoBossStartRetrySeconds", {
+    Text = "Start Retry",
+    Min = 10,
+    Max = 300,
+    Default = 60,
+    Rounding = 0,
+    Suffix = " s",
+})
+BossBox:AddSlider("AutoBossParryOffsetMs", {
+    Text = "Parry Offset",
+    Min = 0,
+    Max = 180,
+    Default = 50,
+    Rounding = 0,
+    Suffix = " ms",
+})
+BossBox:AddButton({
+    Text = "Refresh Boss State",
+    Func = function()
+        connectBossEvents()
+        notify("Boss state requested: " .. tostring(Extra.requestBossState(true)))
+    end,
+})
+BossBox:AddButton({
+    Text = "Start Boss Once",
+    Func = function()
+        task.spawn(function()
+            connectBossEvents()
+            notify("Boss start fired: " .. tostring(Extra.fireBossStart(true)))
+        end)
+    end,
+})
+BossBox:AddCheckbox("ToggleAutoBossStart", {
+    Text = "Auto Start Boss",
+    Default = false,
+})
+BossBox:AddCheckbox("ToggleAutoBossFight", {
+    Text = "Auto Fight Boss",
+    Default = false,
+})
+BossBox:AddCheckbox("ToggleAutoBossMove", {
+    Text = "Auto Enter/Move",
+    Default = true,
+})
+BossBox:AddCheckbox("ToggleAutoBossParry", {
+    Text = "Auto Parry",
+    Default = true,
+})
+BossBox:AddCheckbox("ToggleAutoBossSplitPickups", {
+    Text = "Auto Split Pickups",
+    Default = true,
+})
+BossBox:AddCheckbox("ToggleAutoBossCloseVictory", {
+    Text = "Auto Close Victory",
+    Default = false,
+})
+Extra.BossStatusLabel = BossBox:AddLabel({
+    Text = "Auto Boss is off. Boss state: unknown.",
+    DoesWrap = true,
+})
+
 local OrbBox = Tabs.Automation:AddRightGroupbox("Godly Orb", "sparkles")
 OrbBox:AddSlider("GodlyOrbClaimDelayMs", {
     Text = "Orb Claim Delay",
@@ -6494,6 +7155,31 @@ end)
 Toggles.ToggleAutoCollectFallingStars:OnChanged(function()
     refreshFallingStarAutomation()
 end)
+Toggles.ToggleAutoBossStart:OnChanged(function()
+    refreshAutoBoss()
+end)
+Toggles.ToggleAutoBossFight:OnChanged(function()
+    refreshAutoBoss()
+end)
+Toggles.ToggleAutoBossMove:OnChanged(function(state)
+    if state then
+        refreshAutoBoss()
+    else
+        Extra.BossMoveCFrame = nil
+        Extra.BossMoveUntil = 0
+        Extra.BossMoveReason = nil
+    end
+end)
+Toggles.ToggleAutoBossParry:OnChanged(function()
+    if Extra.bossAutomationEnabled() then
+        refreshAutoBoss()
+    end
+end)
+Toggles.ToggleAutoBossSplitPickups:OnChanged(function()
+    if Extra.bossAutomationEnabled() then
+        refreshAutoBoss()
+    end
+end)
 Toggles.ToggleAutoGemStorm:OnChanged(function(state)
     if state then
         startGemStormLoop()
@@ -6710,6 +7396,11 @@ if Toggles.ToggleAutoCrate.Value then
 end
 if Toggles.ToggleAutoFallingStars.Value or Toggles.ToggleAutoCollectFallingStars.Value then
     startFallingStarAutomation()
+end
+if Extra.bossAutomationEnabled() then
+    startAutoBossLoop()
+else
+    connectBossEvents()
 end
 if Toggles.ToggleAutoGemStorm.Value then
     startGemStormLoop()
