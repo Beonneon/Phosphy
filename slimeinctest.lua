@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.22",
+    Version = "1.3.23",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -1932,6 +1932,7 @@ local BossAutomationConfig = {
     unlockPrestige = 1,
     spawnCostAmount = 2500,
     earlyStartCostAmount = 8000,
+    paidStartCountdownSeconds = 60,
     activeBossName = "ActiveBoss",
     bossZonePath = { "World", "BossRelated", "BossZone" },
     bossSpawnPath = { "World", "BossRelated", "BossSpawn" },
@@ -1953,6 +1954,22 @@ Extra.BossCardIdToLabel = {
     boneFocus = "Bone Focus",
     raidSpark = "Raid Spark",
     secondSoul = "Second Soul",
+}
+Extra.BossAttackVisualPrefixes = {
+    "BossShockwave",
+    "BossThunderWarning",
+    "BossThunderJumpPrompt",
+    "BossGroundBiteWarning",
+    "BossBladeStormCut",
+    "BossSpinBlade",
+    "BossGroundBiteSlime_",
+    "BossSplitDrop_",
+    "BossParryGoo",
+    "BossStarBlazing",
+    "BossShocker",
+    "BossChaosSaber",
+    "BossChaosBuster",
+    "LocalBossSpawnPreview",
 }
 
 local function getBossRemote(name)
@@ -2072,6 +2089,10 @@ function Extra.bossCardPickEnabled()
     return Toggles.ToggleAutoBossBuyCards and Toggles.ToggleAutoBossBuyCards.Value or false
 end
 
+function Extra.bossAttackVfxRemovalEnabled()
+    return Toggles.ToggleAutoBossRemoveAttackVfx and Toggles.ToggleAutoBossRemoveAttackVfx.Value or false
+end
+
 function Extra.bossMoveEnabled()
     return Toggles.ToggleAutoBossMove and Toggles.ToggleAutoBossMove.Value
         and ((Toggles.ToggleAutoBossStart and Toggles.ToggleAutoBossStart.Value)
@@ -2155,6 +2176,72 @@ function Extra.setUndeadStatus(message)
         pcall(function()
             Extra.UndeadStatusLabel:SetText(text)
         end)
+    end
+end
+
+function Extra.isBossAttackVisual(instance)
+    if typeof(instance) ~= "Instance" then
+        return false
+    end
+
+    local name = tostring(instance.Name)
+    for _, prefix in ipairs(Extra.BossAttackVisualPrefixes) do
+        if string.sub(name, 1, #prefix) == prefix then
+            return true
+        end
+    end
+
+    if instance:IsA("ParticleEmitter") or instance:IsA("Trail") or instance:IsA("Beam") then
+        return instance:FindFirstAncestor("ClientBossVfx") ~= nil
+    end
+
+    return false
+end
+
+function Extra.removeBossAttackVfx()
+    local folder = Workspace:FindFirstChild("ClientBossVfx")
+    if not folder then
+        return 0
+    end
+
+    local removed = 0
+    for _, descendant in ipairs(folder:GetDescendants()) do
+        if Extra.isBossAttackVisual(descendant) then
+            removed += 1
+            pcall(function()
+                descendant:Destroy()
+            end)
+        end
+    end
+
+    if removed > 0 then
+        Marker:SetAttribute("BossAttackVfxRemoved", removed)
+        Marker:SetAttribute("BossAttackVfxRemovedAt", Workspace:GetServerTimeNow())
+    end
+    return removed
+end
+
+function Extra.startBossAttackVfxCleaner()
+    stopTask("BossAttackVfx")
+    Extra.removeBossAttackVfx()
+
+    Tasks.BossAttackVfx = task.spawn(function()
+        while Marker:GetAttribute("Session") == Session and Extra.bossAttackVfxRemovalEnabled() do
+            Extra.removeBossAttackVfx()
+            task.wait(0.2)
+        end
+    end)
+end
+
+function Extra.stopBossAttackVfxCleaner()
+    stopTask("BossAttackVfx")
+end
+
+function Extra.refreshBossAttackVfxCleaner()
+    if Extra.bossAttackVfxRemovalEnabled() then
+        Extra.startBossAttackVfxCleaner()
+    else
+        Extra.stopBossAttackVfxCleaner()
     end
 end
 
@@ -2336,11 +2423,6 @@ function Extra.fireBossStart(force)
         Extra.setBossStatus("Boss is already active.")
         return false
     end
-    if state.status == "spawning" then
-        Extra.updateBossMovementTarget("Boss Entry", 2)
-        Extra.setBossStatus(Extra.describeBossState())
-        return false
-    end
 
     local now = os.clock()
     local retrySeconds = math.max(10, getNumberOption("AutoBossStartRetrySeconds", 60))
@@ -2364,6 +2446,41 @@ function Extra.fireBossStart(force)
     local wantSpawnStart = force
         or (Toggles.ToggleAutoBossStart and Toggles.ToggleAutoBossStart.Value)
         or Extra.bossPayOpenEnabled()
+
+    if state.status == "spawning" then
+        Extra.updateBossMovementTarget("Boss Entry", 2)
+
+        if not wantEarlyStart then
+            Extra.setBossStatus(Extra.describeBossState())
+            return false
+        end
+
+        local entryClosesAt = tonumber(state.entryClosesAt)
+        local remaining = entryClosesAt and math.max(0, math.ceil(entryClosesAt - Workspace:GetServerTimeNow())) or nil
+        if remaining and remaining <= BossAutomationConfig.paidStartCountdownSeconds then
+            Extra.setBossStatus("Boss already starting soon (" .. tostring(remaining) .. "s).")
+            return false
+        end
+        if not earlyRemote then
+            Extra.setBossStatus("BossEarlyStartRequested remote was not found.")
+            return false
+        end
+        if power and power < BossAutomationConfig.earlyStartCostAmount then
+            Extra.setBossStatus("Need " .. tostring(BossAutomationConfig.earlyStartCostAmount) .. " power for early boss start.")
+            return false
+        end
+
+        if Extra.bossMoveEnabled() then
+            task.wait(0.12)
+        end
+
+        Extra.BossLastStartRequestAt = now
+        Marker:SetAttribute("BossLastStartRemote", "BossEarlyStartRequested")
+        Marker:SetAttribute("BossLastStartRequest", Workspace:GetServerTimeNow())
+        earlyRemote:FireServer()
+        Extra.setBossStatus("Boss early start fired during entry window.")
+        return true
+    end
 
     if wantEarlyStart and earlyRemote and (not power or power >= BossAutomationConfig.earlyStartCostAmount) then
         remote = earlyRemote
@@ -2877,6 +2994,9 @@ function Extra.connectBossEvents()
     local thunderRemote = getBossRemote("BossThunderWave")
     if thunderRemote then
         Connections.BossThunderWave = thunderRemote.OnClientEvent:Connect(function()
+            if Extra.bossAttackVfxRemovalEnabled() then
+                task.defer(Extra.removeBossAttackVfx)
+            end
             if Extra.bossFightEnabled() then
                 Extra.updateBossMovementTarget("Boss Thunder Dodge", 3)
             end
@@ -7609,6 +7729,10 @@ BossBox:AddCheckbox("ToggleAutoBossCloseVictory", {
     Text = "Auto Close Victory",
     Default = false,
 })
+BossBox:AddCheckbox("ToggleAutoBossRemoveAttackVfx", {
+    Text = "Remove Boss Attack VFX",
+    Default = true,
+})
 BossBox:AddCheckbox("ToggleAutoUndeadBoss", {
     Text = "Auto Undead Mini Boss",
     Default = false,
@@ -7977,6 +8101,9 @@ end)
 Toggles.ToggleAutoBossCloseVictory:OnChanged(function()
     Extra.refreshAutoBoss()
 end)
+Toggles.ToggleAutoBossRemoveAttackVfx:OnChanged(function()
+    Extra.refreshBossAttackVfxCleaner()
+end)
 Toggles.ToggleAutoUndeadBoss:OnChanged(function()
     Extra.refreshAutoUndead()
 end)
@@ -8208,6 +8335,9 @@ if Toggles.ToggleAutoFallingStars.Value or Toggles.ToggleAutoCollectFallingStars
 end
 if Extra.autoQuestClaimsEnabled() then
     Extra.startAutoQuestClaims()
+end
+if Extra.bossAttackVfxRemovalEnabled() then
+    Extra.startBossAttackVfxCleaner()
 end
 if Extra.bossAutomationEnabled() then
     Extra.startAutoBossLoop()
