@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.19",
+    Version = "1.3.20",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -92,7 +92,13 @@ local Extra = {
     BossMoveReason = nil,
     BossParrySent = {},
     BossSplitPickups = {},
+    BossCardPickPending = {},
+    BossLastVictoryPayload = nil,
     BossStatusLabel = nil,
+    UndeadMiniBoss = nil,
+    UndeadLastStateRequestAt = 0,
+    UndeadLastHitAt = 0,
+    UndeadStatusLabel = nil,
     SpawnIdQueue = {},
     SpawnIdQueued = {},
     AutoMidasGoldCount = 0,
@@ -829,7 +835,9 @@ local function getPriorityMovementTarget()
     if Extra.BossMoveCFrame and os.clock() <= (Extra.BossMoveUntil or 0)
         and Toggles.ToggleAutoBossMove and Toggles.ToggleAutoBossMove.Value
         and ((Toggles.ToggleAutoBossFight and Toggles.ToggleAutoBossFight.Value)
-        or (Toggles.ToggleAutoBossStart and Toggles.ToggleAutoBossStart.Value)) then
+        or (Toggles.ToggleAutoBossStart and Toggles.ToggleAutoBossStart.Value)
+        or (Toggles.ToggleAutoBossPayOpen and Toggles.ToggleAutoBossPayOpen.Value)
+        or (Toggles.ToggleAutoUndeadBoss and Toggles.ToggleAutoUndeadBoss.Value)) then
         return Extra.BossMoveCFrame, Extra.BossMoveReason or "Boss"
     end
 
@@ -1904,6 +1912,22 @@ local BossAutomationConfig = {
     bossTeleportGoalPath = { "World", "BossRelated", "BossTeleport", "Goal" },
 }
 
+Extra.BossCardValues = { "---", "Undead Echo", "Skelly Hunger", "Bone Focus", "Raid Spark", "Second Soul" }
+Extra.BossCardLabelToId = {
+    ["Undead Echo"] = "undeadEcho",
+    ["Skelly Hunger"] = "skellyHunger",
+    ["Bone Focus"] = "boneFocus",
+    ["Raid Spark"] = "raidSpark",
+    ["Second Soul"] = "secondSoul",
+}
+Extra.BossCardIdToLabel = {
+    undeadEcho = "Undead Echo",
+    skellyHunger = "Skelly Hunger",
+    boneFocus = "Bone Focus",
+    raidSpark = "Raid Spark",
+    secondSoul = "Second Soul",
+}
+
 local function getBossRemote(name)
     return getRemote(name, 5)
 end
@@ -2004,15 +2028,28 @@ end
 function Extra.bossAutomationEnabled()
     return (Toggles.ToggleAutoBossStart and Toggles.ToggleAutoBossStart.Value)
         or (Toggles.ToggleAutoBossFight and Toggles.ToggleAutoBossFight.Value)
+        or (Toggles.ToggleAutoBossPayOpen and Toggles.ToggleAutoBossPayOpen.Value)
+        or (Toggles.ToggleAutoBossBuyCards and Toggles.ToggleAutoBossBuyCards.Value)
 end
 
 function Extra.bossFightEnabled()
     return Toggles.ToggleAutoBossFight and Toggles.ToggleAutoBossFight.Value or false
 end
 
+function Extra.bossPayOpenEnabled()
+    return Toggles.ToggleAutoBossPayOpen and Toggles.ToggleAutoBossPayOpen.Value or false
+end
+
+function Extra.bossCardPickEnabled()
+    return Toggles.ToggleAutoBossBuyCards and Toggles.ToggleAutoBossBuyCards.Value or false
+end
+
 function Extra.bossMoveEnabled()
     return Toggles.ToggleAutoBossMove and Toggles.ToggleAutoBossMove.Value
-        and ((Toggles.ToggleAutoBossStart and Toggles.ToggleAutoBossStart.Value) or Extra.bossFightEnabled())
+        and ((Toggles.ToggleAutoBossStart and Toggles.ToggleAutoBossStart.Value)
+            or Extra.bossFightEnabled()
+            or Extra.bossPayOpenEnabled()
+            or (Toggles.ToggleAutoUndeadBoss and Toggles.ToggleAutoUndeadBoss.Value))
 end
 
 function Extra.bossParryEnabled()
@@ -2027,12 +2064,32 @@ function Extra.bossSplitPickupEnabled()
         and Toggles.ToggleAutoBossSplitPickups.Value
 end
 
+function Extra.undeadEnabled()
+    return Toggles.ToggleAutoUndeadBoss and Toggles.ToggleAutoUndeadBoss.Value or false
+end
+
+function Extra.undeadMoveEnabled()
+    return Extra.undeadEnabled()
+        and (not Toggles.ToggleAutoUndeadMove or Toggles.ToggleAutoUndeadMove.Value)
+        and Toggles.ToggleAutoBossMove and Toggles.ToggleAutoBossMove.Value
+end
+
 function Extra.setBossStatus(message)
     local text = tostring(message)
     Marker:SetAttribute("BossAutomationStatus", text)
     if Extra.BossStatusLabel then
         pcall(function()
             Extra.BossStatusLabel:SetText(text)
+        end)
+    end
+end
+
+function Extra.setUndeadStatus(message)
+    local text = tostring(message)
+    Marker:SetAttribute("UndeadAutomationStatus", text)
+    if Extra.UndeadStatusLabel then
+        pcall(function()
+            Extra.UndeadStatusLabel:SetText(text)
         end)
     end
 end
@@ -2147,6 +2204,14 @@ function Extra.getBossStartCFrame()
 end
 
 function Extra.getBossFightCFrame()
+    local activeBoss = Extra.getActiveBossInstance()
+    local activeCFrame = bossInstanceCFrame(activeBoss)
+    local stayAbove = not Toggles.ToggleAutoBossStayAbove or Toggles.ToggleAutoBossStayAbove.Value
+    if stayAbove and activeCFrame then
+        local hoverHeight = math.max(8, getNumberOption("AutoBossHoverHeight", 24))
+        return bossOffsetCFrame(activeCFrame, hoverHeight)
+    end
+
     local goal = bossResolvePath(BossAutomationConfig.bossTeleportGoalPath, "Goal")
     local goalCFrame = bossInstanceCFrame(goal)
     if goalCFrame then
@@ -2159,8 +2224,6 @@ function Extra.getBossFightCFrame()
         return bossOffsetCFrame(zoneCFrame, 3)
     end
 
-    local activeBoss = Extra.getActiveBossInstance()
-    local activeCFrame = bossInstanceCFrame(activeBoss)
     if activeCFrame then
         return bossOffsetCFrame(activeCFrame, 8)
     end
@@ -2233,18 +2296,24 @@ function Extra.fireBossStart(force)
     local spawnRemote = getBossRemote("BossSpawnRequested")
     local remote = nil
     local remoteName = nil
+    local wantEarlyStart = force or Extra.bossPayOpenEnabled()
+    local wantSpawnStart = force
+        or (Toggles.ToggleAutoBossStart and Toggles.ToggleAutoBossStart.Value)
+        or Extra.bossPayOpenEnabled()
 
-    if earlyRemote and (not power or power >= BossAutomationConfig.earlyStartCostAmount) then
+    if wantEarlyStart and earlyRemote and (not power or power >= BossAutomationConfig.earlyStartCostAmount) then
         remote = earlyRemote
         remoteName = "BossEarlyStartRequested"
-    elseif spawnRemote and (not power or power >= BossAutomationConfig.spawnCostAmount) then
+    elseif wantSpawnStart and spawnRemote and (not power or power >= BossAutomationConfig.spawnCostAmount) then
         remote = spawnRemote
         remoteName = "BossSpawnRequested"
     end
 
     if not remote then
-        if earlyRemote and power then
+        if wantEarlyStart and earlyRemote and power and power < BossAutomationConfig.earlyStartCostAmount then
             Extra.setBossStatus("Need " .. tostring(BossAutomationConfig.earlyStartCostAmount) .. " power for early boss start.")
+        elseif wantSpawnStart and spawnRemote and power and power < BossAutomationConfig.spawnCostAmount then
+            Extra.setBossStatus("Need " .. tostring(BossAutomationConfig.spawnCostAmount) .. " power for boss spawn.")
         else
             Extra.setBossStatus("Boss start remote was not found.")
         end
@@ -2349,6 +2418,305 @@ function Extra.collectBossSplitPickup(payload)
     return true
 end
 
+function Extra.selectedBossCardId()
+    local option = Options.BossCardPick
+    local value = option and option.Value or "---"
+    if typeof(value) == "table" then
+        for key, selected in pairs(value) do
+            if selected == true then
+                value = key
+                break
+            elseif typeof(selected) == "string" then
+                value = selected
+                break
+            end
+        end
+    end
+
+    value = tostring(value or "---")
+    if value == "---" then
+        return nil
+    end
+
+    return Extra.BossCardLabelToId[value] or value
+end
+
+function Extra.bossCardId(card)
+    if typeof(card) ~= "table" then
+        return nil
+    end
+
+    local id = card.id or card.Id or card.key or card.name
+    if id == nil then
+        return nil
+    end
+
+    return tostring(id)
+end
+
+function Extra.bossCardLabel(card, id)
+    if typeof(card) == "table" then
+        return tostring(card.title or card.displayName or card.name or Extra.BossCardIdToLabel[id] or id)
+    end
+
+    return tostring(Extra.BossCardIdToLabel[id] or id)
+end
+
+function Extra.pickBossVictoryCard(payload)
+    if not Extra.bossCardPickEnabled() then
+        return false
+    end
+    if typeof(payload) ~= "table" then
+        Extra.setBossStatus("Boss victory payload had no card table.")
+        return false
+    end
+
+    Extra.BossLastVictoryPayload = payload
+    local source = typeof(payload.cards) == "table" and payload.cards or payload
+    local cards = {}
+    for _, card in pairs(source) do
+        local id = Extra.bossCardId(card)
+        if id then
+            table.insert(cards, card)
+        end
+    end
+    if #cards <= 0 then
+        Extra.setBossStatus("Boss victory had no offered cards.")
+        return false
+    end
+
+    local selectedId = Extra.selectedBossCardId()
+    local chosen = nil
+    if Toggles.ToggleAutoBossRandomCard and Toggles.ToggleAutoBossRandomCard.Value then
+        chosen = cards[math.random(1, #cards)]
+    elseif selectedId then
+        for _, card in ipairs(cards) do
+            if Extra.bossCardId(card) == selectedId then
+                chosen = card
+                break
+            end
+        end
+        chosen = chosen or cards[1]
+    else
+        chosen = cards[1]
+    end
+
+    local id = Extra.bossCardId(chosen)
+    if not id then
+        Extra.setBossStatus("Could not read boss card id.")
+        return false
+    end
+
+    local now = os.clock()
+    if now - (Extra.BossCardPickPending[id] or 0) < 4 then
+        return false
+    end
+
+    local cost = tonumber(chosen.cost) or 1
+    local coins = tonumber(payload.bossKillCoins)
+    if coins == nil then
+        local profile = getProfileData()
+        coins = profile and tonumber(profile.bossKillCoins) or nil
+    end
+    if coins and coins < cost then
+        Extra.setBossStatus("Need " .. tostring(cost) .. " boss coin(s) for " .. Extra.bossCardLabel(chosen, id) .. ".")
+        return false
+    end
+
+    local remote = getBossRemote("BossUpgradeRequested")
+    if not remote then
+        Extra.setBossStatus("BossUpgradeRequested remote was not found.")
+        return false
+    end
+
+    Extra.BossCardPickPending[id] = now
+    Marker:SetAttribute("BossLastCardPick", id)
+    Marker:SetAttribute("BossLastCardPickAt", Workspace:GetServerTimeNow())
+    remote:FireServer(id)
+    Extra.setBossStatus("Boss card pick fired: " .. Extra.bossCardLabel(chosen, id) .. ".")
+    return true
+end
+
+function Extra.handleBossUpgradeResult(ok, payload)
+    local id = nil
+    local reason = nil
+    if typeof(payload) == "table" then
+        id = payload.id or payload.cardId or payload.upgradeId
+        reason = payload.reason or payload.error or payload.message
+    elseif payload ~= nil then
+        reason = tostring(payload)
+    end
+
+    if id ~= nil then
+        Extra.BossCardPickPending[tostring(id)] = nil
+    else
+        Extra.BossCardPickPending = {}
+    end
+
+    if ok then
+        Extra.setBossStatus("Boss card bought: " .. Extra.bossCardLabel(nil, id or "upgrade") .. ".")
+    else
+        Extra.setBossStatus("Boss card buy failed: " .. tostring(reason or "unknown") .. ".")
+    end
+end
+
+function Extra.applyUndeadMiniBossState(payload)
+    if typeof(payload) ~= "table" then
+        return false
+    end
+
+    if payload.active == true then
+        local position = payloadToPosition(payload.position or payload)
+        local id = payload.id
+        if id == nil or not position then
+            Extra.setUndeadStatus("Undead mini boss active, missing id/position.")
+            return false
+        end
+
+        Extra.UndeadMiniBoss = {
+            id = id,
+            position = position,
+            health = tonumber(payload.health) or 0,
+            maxHealth = tonumber(payload.maxHealth) or 0,
+        }
+        Marker:SetAttribute("UndeadMiniBossId", tostring(id))
+        Marker:SetAttribute("UndeadMiniBossHealth", Extra.UndeadMiniBoss.health)
+        Marker:SetAttribute("UndeadMiniBossMaxHealth", Extra.UndeadMiniBoss.maxHealth)
+
+        if Extra.undeadMoveEnabled() then
+            Extra.setBossMoveTarget(CFrame.new(position + Vector3.new(0, 3, 0)), 1.25, "Undead Mini Boss")
+        end
+
+        if Extra.UndeadMiniBoss.maxHealth > 0 then
+            Extra.setUndeadStatus("Undead mini boss: "
+                .. tostring(math.floor(Extra.UndeadMiniBoss.health))
+                .. "/"
+                .. tostring(math.floor(Extra.UndeadMiniBoss.maxHealth))
+                .. " HP.")
+        else
+            Extra.setUndeadStatus("Undead mini boss active.")
+        end
+        return true
+    end
+
+    Extra.UndeadMiniBoss = nil
+    if payload.defeated == true then
+        Extra.setUndeadStatus("Undead mini boss defeated.")
+    else
+        Extra.setUndeadStatus("Waiting for undead mini boss.")
+    end
+    return false
+end
+
+function Extra.requestUndeadMiniBossState(force)
+    local now = os.clock()
+    if not force and now - (Extra.UndeadLastStateRequestAt or 0) < 5 then
+        return false
+    end
+
+    local remote = getBossRemote("RequestUndeadMiniBossState")
+    if not remote then
+        Extra.setUndeadStatus("RequestUndeadMiniBossState remote was not found.")
+        return false
+    end
+
+    Extra.UndeadLastStateRequestAt = now
+    Marker:SetAttribute("UndeadLastStateRequest", Workspace:GetServerTimeNow())
+    remote:FireServer()
+    return true
+end
+
+function Extra.hitUndeadMiniBoss(force)
+    if not Extra.undeadEnabled() then
+        return false
+    end
+
+    local info = Extra.UndeadMiniBoss
+    if typeof(info) ~= "table" or info.id == nil then
+        return false
+    end
+
+    local now = os.clock()
+    local delaySeconds = math.max(0.25, getNumberOption("AutoUndeadHitDelayMs", 500) / 1000)
+    if not force and now - (Extra.UndeadLastHitAt or 0) < delaySeconds then
+        return false
+    end
+
+    local position = info.position
+    if typeof(position) == "Vector3" then
+        if Extra.undeadMoveEnabled() then
+            Extra.setBossMoveTarget(CFrame.new(position + Vector3.new(0, 3, 0)), delaySeconds + 0.35, "Undead Mini Boss")
+        else
+            local root = getRoot()
+            if root and (root.Position - position).Magnitude > 54 then
+                Extra.setUndeadStatus("Undead mini boss is out of hit range.")
+                return false
+            end
+        end
+    end
+
+    local remote = getBossRemote("UndeadMiniBossHitRequested")
+    if not remote then
+        Extra.setUndeadStatus("UndeadMiniBossHitRequested remote was not found.")
+        return false
+    end
+
+    Extra.UndeadLastHitAt = now
+    Marker:SetAttribute("UndeadLastHitId", tostring(info.id))
+    Marker:SetAttribute("UndeadLastHitAt", Workspace:GetServerTimeNow())
+    remote:FireServer(info.id)
+    return true
+end
+
+function Extra.disconnectUndeadEvents()
+    disconnect("UndeadMiniBossStateChanged")
+end
+
+function Extra.connectUndeadEvents()
+    Extra.disconnectUndeadEvents()
+
+    local stateRemote = getBossRemote("UndeadMiniBossStateChanged")
+    if stateRemote then
+        Connections.UndeadMiniBossStateChanged = stateRemote.OnClientEvent:Connect(function(payload)
+            Extra.applyUndeadMiniBossState(payload)
+        end)
+    end
+end
+
+function Extra.startAutoUndeadLoop()
+    stopTask("AutoUndead")
+    Extra.connectUndeadEvents()
+    Extra.requestUndeadMiniBossState(true)
+
+    Tasks.AutoUndead = task.spawn(function()
+        while Marker:GetAttribute("Session") == Session and Extra.undeadEnabled() do
+            Extra.requestUndeadMiniBossState(false)
+            Extra.hitUndeadMiniBoss(false)
+            task.wait(0.2)
+        end
+    end)
+end
+
+function Extra.stopAutoUndeadLoop()
+    stopTask("AutoUndead")
+    Extra.disconnectUndeadEvents()
+    Extra.UndeadMiniBoss = nil
+    if Extra.BossMoveReason == "Undead Mini Boss" then
+        Extra.BossMoveCFrame = nil
+        Extra.BossMoveUntil = 0
+        Extra.BossMoveReason = nil
+    end
+    Extra.setUndeadStatus("Auto Undead is off.")
+end
+
+function Extra.refreshAutoUndead()
+    if Extra.undeadEnabled() then
+        Extra.startAutoUndeadLoop()
+    else
+        Extra.stopAutoUndeadLoop()
+    end
+end
+
 function Extra.disconnectBossEvents()
     disconnect("BossStateChanged")
     disconnect("BossSpawnResult")
@@ -2356,6 +2724,8 @@ function Extra.disconnectBossEvents()
     disconnect("BossParryResult")
     disconnect("BossSplitPickupSpawned")
     disconnect("BossVictoryRewards")
+    disconnect("BossUpgradeResult")
+    disconnect("BossThunderWave")
 end
 
 function Extra.connectBossEvents()
@@ -2403,14 +2773,32 @@ function Extra.connectBossEvents()
         end)
     end
 
+    local thunderRemote = getBossRemote("BossThunderWave")
+    if thunderRemote then
+        Connections.BossThunderWave = thunderRemote.OnClientEvent:Connect(function()
+            if Extra.bossFightEnabled() then
+                Extra.updateBossMovementTarget("Boss Thunder Dodge", 3)
+            end
+        end)
+    end
+
+    local upgradeResultRemote = getBossRemote("BossUpgradeResult")
+    if upgradeResultRemote then
+        Connections.BossUpgradeResult = upgradeResultRemote.OnClientEvent:Connect(function(ok, payload)
+            Extra.handleBossUpgradeResult(ok, payload)
+        end)
+    end
+
     local victoryRemote = getBossRemote("BossVictoryRewards")
     if victoryRemote then
         Connections.BossVictoryRewards = victoryRemote.OnClientEvent:Connect(function(...)
             Marker:SetAttribute("BossLastVictoryAt", Workspace:GetServerTimeNow())
             Marker:SetAttribute("BossLastVictoryArgs", select("#", ...))
             Extra.setBossStatus("Boss victory rewards received.")
+            local payload = select(1, ...)
+            local pickedCard = Extra.pickBossVictoryCard(payload)
             if Toggles.ToggleAutoBossCloseVictory and Toggles.ToggleAutoBossCloseVictory.Value then
-                task.delay(1, function()
+                task.delay(pickedCard and 1.5 or 1, function()
                     local closeRemote = getBossRemote("BossVictoryClosed")
                     if closeRemote then
                         closeRemote:FireServer()
@@ -2431,7 +2819,8 @@ function Extra.startAutoBossLoop()
         while Marker:GetAttribute("Session") == Session and Extra.bossAutomationEnabled() do
             Extra.requestBossState(false)
 
-            if Toggles.ToggleAutoBossStart and Toggles.ToggleAutoBossStart.Value then
+            if (Toggles.ToggleAutoBossStart and Toggles.ToggleAutoBossStart.Value)
+                or Extra.bossPayOpenEnabled() then
                 Extra.fireBossStart(false)
             end
 
@@ -2450,9 +2839,11 @@ end
 function Extra.stopAutoBossLoop()
     stopTask("AutoBoss")
     Extra.disconnectBossEvents()
-    Extra.BossMoveCFrame = nil
-    Extra.BossMoveUntil = 0
-    Extra.BossMoveReason = nil
+    if Extra.BossMoveReason ~= "Undead Mini Boss" or not Extra.undeadEnabled() then
+        Extra.BossMoveCFrame = nil
+        Extra.BossMoveUntil = 0
+        Extra.BossMoveReason = nil
+    end
     Extra.setBossStatus("Auto Boss is off. " .. Extra.describeBossState())
 end
 
@@ -6808,6 +7199,21 @@ BossBox:AddSlider("AutoBossParryOffsetMs", {
     Rounding = 0,
     Suffix = " ms",
 })
+BossBox:AddSlider("AutoBossHoverHeight", {
+    Text = "Boss Hover Height",
+    Min = 8,
+    Max = 60,
+    Default = 24,
+    Rounding = 0,
+})
+BossBox:AddSlider("AutoUndeadHitDelayMs", {
+    Text = "Undead Hit Delay",
+    Min = 250,
+    Max = 2000,
+    Default = 500,
+    Rounding = 0,
+    Suffix = " ms",
+})
 BossBox:AddButton({
     Text = "Refresh Boss State",
     Func = function()
@@ -6824,8 +7230,27 @@ BossBox:AddButton({
         end)
     end,
 })
+BossBox:AddButton({
+    Text = "Pay Open Boss Once",
+    Func = function()
+        task.spawn(function()
+            Extra.connectBossEvents()
+            notify("Boss pay/open fired: " .. tostring(Extra.fireBossStart(true)))
+        end)
+    end,
+})
+BossBox:AddDropdown("BossCardPick", {
+    Text = "Card Pick",
+    Values = Extra.BossCardValues,
+    Multi = false,
+    Default = "---",
+})
 BossBox:AddCheckbox("ToggleAutoBossStart", {
     Text = "Auto Start Boss",
+    Default = false,
+})
+BossBox:AddCheckbox("ToggleAutoBossPayOpen", {
+    Text = "Auto Pay Open Boss",
     Default = false,
 })
 BossBox:AddCheckbox("ToggleAutoBossFight", {
@@ -6836,6 +7261,10 @@ BossBox:AddCheckbox("ToggleAutoBossMove", {
     Text = "Auto Enter/Move",
     Default = true,
 })
+BossBox:AddCheckbox("ToggleAutoBossStayAbove", {
+    Text = "Stay Above Boss",
+    Default = true,
+})
 BossBox:AddCheckbox("ToggleAutoBossParry", {
     Text = "Auto Parry",
     Default = true,
@@ -6844,12 +7273,32 @@ BossBox:AddCheckbox("ToggleAutoBossSplitPickups", {
     Text = "Auto Split Pickups",
     Default = true,
 })
+BossBox:AddCheckbox("ToggleAutoBossBuyCards", {
+    Text = "Auto Card Pick",
+    Default = false,
+})
+BossBox:AddCheckbox("ToggleAutoBossRandomCard", {
+    Text = "Random Card Pick",
+    Default = false,
+})
 BossBox:AddCheckbox("ToggleAutoBossCloseVictory", {
     Text = "Auto Close Victory",
     Default = false,
 })
+BossBox:AddCheckbox("ToggleAutoUndeadBoss", {
+    Text = "Auto Undead Mini Boss",
+    Default = false,
+})
+BossBox:AddCheckbox("ToggleAutoUndeadMove", {
+    Text = "Move To Undead Boss",
+    Default = true,
+})
 Extra.BossStatusLabel = BossBox:AddLabel({
     Text = "Auto Boss is off. Boss state: unknown.",
+    DoesWrap = true,
+})
+Extra.UndeadStatusLabel = BossBox:AddLabel({
+    Text = "Auto Undead is off.",
     DoesWrap = true,
 })
 
@@ -7156,16 +7605,25 @@ end)
 Toggles.ToggleAutoBossStart:OnChanged(function()
     Extra.refreshAutoBoss()
 end)
+Toggles.ToggleAutoBossPayOpen:OnChanged(function()
+    Extra.refreshAutoBoss()
+end)
 Toggles.ToggleAutoBossFight:OnChanged(function()
     Extra.refreshAutoBoss()
 end)
 Toggles.ToggleAutoBossMove:OnChanged(function(state)
     if state then
         Extra.refreshAutoBoss()
+        Extra.refreshAutoUndead()
     else
         Extra.BossMoveCFrame = nil
         Extra.BossMoveUntil = 0
         Extra.BossMoveReason = nil
+    end
+end)
+Toggles.ToggleAutoBossStayAbove:OnChanged(function()
+    if Extra.bossMoveEnabled() then
+        Extra.updateBossMovementTarget("Boss Hover", 1.5)
     end
 end)
 Toggles.ToggleAutoBossParry:OnChanged(function()
@@ -7176,6 +7634,26 @@ end)
 Toggles.ToggleAutoBossSplitPickups:OnChanged(function()
     if Extra.bossAutomationEnabled() then
         Extra.refreshAutoBoss()
+    end
+end)
+Toggles.ToggleAutoBossBuyCards:OnChanged(function()
+    Extra.refreshAutoBoss()
+end)
+Toggles.ToggleAutoBossRandomCard:OnChanged(function()
+    if Extra.bossAutomationEnabled() then
+        Extra.refreshAutoBoss()
+    end
+end)
+Toggles.ToggleAutoUndeadBoss:OnChanged(function()
+    Extra.refreshAutoUndead()
+end)
+Toggles.ToggleAutoUndeadMove:OnChanged(function(state)
+    if state then
+        Extra.refreshAutoUndead()
+    elseif Extra.BossMoveReason == "Undead Mini Boss" then
+        Extra.BossMoveCFrame = nil
+        Extra.BossMoveUntil = 0
+        Extra.BossMoveReason = nil
     end
 end)
 Toggles.ToggleAutoGemStorm:OnChanged(function(state)
@@ -7397,6 +7875,9 @@ if Toggles.ToggleAutoFallingStars.Value or Toggles.ToggleAutoCollectFallingStars
 end
 if Extra.bossAutomationEnabled() then
     Extra.startAutoBossLoop()
+end
+if Extra.undeadEnabled() then
+    Extra.startAutoUndeadLoop()
 end
 if Toggles.ToggleAutoGemStorm.Value then
     startGemStormLoop()
