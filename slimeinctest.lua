@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.21",
+    Version = "1.3.22",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -100,6 +100,9 @@ local Extra = {
     UndeadLastStateRequestAt = 0,
     UndeadLastHitAt = 0,
     UndeadStatusLabel = nil,
+    QuestClaimLastAttempt = {},
+    QuestClaimStatusLabel = nil,
+    Constants = nil,
     SpawnIdQueue = {},
     SpawnIdQueued = {},
     AutoMidasGoldCount = 0,
@@ -831,6 +834,13 @@ end
 local function getPriorityMovementTarget()
     if PalCollectionActive then
         return nil, "Collecting Pals"
+    end
+
+    if Extra.getBossPriorityMovementTarget then
+        local bossTarget, bossReason = Extra.getBossPriorityMovementTarget()
+        if bossTarget then
+            return bossTarget, bossReason or "Boss"
+        end
     end
 
     if Extra.BossMoveCFrame and os.clock() <= (Extra.BossMoveUntil or 0)
@@ -1643,6 +1653,10 @@ local function payloadToPosition(value, depth)
 end
 
 local function collectFallingStarPart(part)
+    if Extra.bossHasMovementPriority and Extra.bossHasMovementPriority() then
+        return false
+    end
+
     local root = getRoot()
     if not (root and part and part.Parent) then
         return false
@@ -1663,6 +1677,10 @@ local function collectFallingStarPart(part)
 end
 
 local function collectFallingStarPosition(position, holdSeconds)
+    if Extra.bossHasMovementPriority and Extra.bossHasMovementPriority() then
+        return false
+    end
+
     local root = getRoot()
     if not (root and typeof(position) == "Vector3") then
         return false
@@ -1677,6 +1695,14 @@ local function collectFallingStarPosition(position, holdSeconds)
 end
 
 local function collectFallingStars(position)
+    if Extra.bossHasMovementPriority and Extra.bossHasMovementPriority() then
+        FallingStarMovePosition = nil
+        FallingStarMoveUntil = 0
+        Marker:SetAttribute("FallingStarLastCollectCount", 0)
+        Marker:SetAttribute("FallingStarSkippedForBoss", Workspace:GetServerTimeNow())
+        return 0
+    end
+
     local maxStars = 8
     local collected = 0
 
@@ -2052,6 +2078,42 @@ function Extra.bossMoveEnabled()
             or Extra.bossFightEnabled()
             or Extra.bossPayOpenEnabled()
             or (Toggles.ToggleAutoUndeadBoss and Toggles.ToggleAutoUndeadBoss.Value))
+end
+
+function Extra.bossHasMovementPriority()
+    if not (Toggles.ToggleAutoBossMove and Toggles.ToggleAutoBossMove.Value) then
+        return false
+    end
+
+    local state = Extra.BossState or {}
+    if state.status == "active" and Extra.bossFightEnabled() then
+        return true
+    end
+
+    if state.status == "spawning" then
+        return (Toggles.ToggleAutoBossStart and Toggles.ToggleAutoBossStart.Value)
+            or Extra.bossPayOpenEnabled()
+            or Extra.bossFightEnabled()
+    end
+
+    return false
+end
+
+function Extra.getBossPriorityMovementTarget()
+    if not Extra.bossHasMovementPriority() then
+        return nil, nil
+    end
+
+    local state = Extra.BossState or {}
+    local target = state.status == "active" and Extra.getBossFightCFrame() or (Extra.getBossFightCFrame() or Extra.getBossStartCFrame())
+    if target then
+        Extra.BossMoveCFrame = target
+        Extra.BossMoveUntil = os.clock() + 1.25
+        Extra.BossMoveReason = state.status == "spawning" and "Boss Entry" or "Boss Arena"
+        return target, Extra.BossMoveReason
+    end
+
+    return nil, nil
 end
 
 function Extra.bossParryEnabled()
@@ -2891,6 +2953,202 @@ function Extra.refreshAutoBoss()
 end
 end
 
+do
+local function getQuestConstants()
+    if Extra.Constants then
+        return Extra.Constants
+    end
+
+    local shared = ReplicatedStorage:FindFirstChild("Shared")
+    local module = shared and shared:FindFirstChild("Constants")
+    if module and module:IsA("ModuleScript") then
+        local ok, constants = pcall(require, module)
+        if ok and typeof(constants) == "table" then
+            Extra.Constants = constants
+            return constants
+        end
+    end
+
+    return nil
+end
+
+local function questClaimCooldown()
+    return math.max(30, getNumberOption("AutoQuestClaimRetrySeconds", 120))
+end
+
+local function questClaimReady(key)
+    return os.clock() - (Extra.QuestClaimLastAttempt[key] or 0) >= questClaimCooldown()
+end
+
+local function markQuestClaimAttempt(key)
+    Extra.QuestClaimLastAttempt[key] = os.clock()
+end
+
+function Extra.autoQuestClaimsEnabled()
+    return (Toggles.ToggleAutoDailyQuestClaim and Toggles.ToggleAutoDailyQuestClaim.Value)
+        or (Toggles.ToggleAutoQuestClaim and Toggles.ToggleAutoQuestClaim.Value)
+end
+
+function Extra.setQuestClaimStatus(message)
+    local text = tostring(message)
+    Marker:SetAttribute("QuestClaimStatus", text)
+    if Extra.QuestClaimStatusLabel then
+        pcall(function()
+            Extra.QuestClaimStatusLabel:SetText(text)
+        end)
+    end
+end
+
+function Extra.claimReadyDailyQuests(profile)
+    if not (Toggles.ToggleAutoDailyQuestClaim and Toggles.ToggleAutoDailyQuestClaim.Value) then
+        return 0
+    end
+    if typeof(profile) ~= "table" or typeof(profile.dailyQuests) ~= "table" then
+        return 0
+    end
+
+    local dailyQuests = profile.dailyQuests.quests
+    if typeof(dailyQuests) ~= "table" then
+        return 0
+    end
+
+    local remote = getRemote("ClaimDailyQuest", 10)
+    if not remote then
+        Extra.setQuestClaimStatus("ClaimDailyQuest remote was not found.")
+        return 0
+    end
+
+    local fired = 0
+    for _, quest in pairs(dailyQuests) do
+        if typeof(quest) == "table" and quest.id ~= nil and quest.claimed ~= true then
+            local progress = tonumber(quest.progress) or 0
+            local goal = tonumber(quest.goal) or math.huge
+            local key = "daily:" .. tostring(quest.id)
+            if progress >= goal and questClaimReady(key) then
+                markQuestClaimAttempt(key)
+                remote:FireServer(quest.id)
+                fired += 1
+                Marker:SetAttribute("LastDailyQuestClaimId", tostring(quest.id))
+                Marker:SetAttribute("LastDailyQuestClaimAt", Workspace:GetServerTimeNow())
+                task.wait(0.15)
+            end
+        end
+    end
+
+    return fired
+end
+
+function Extra.claimReadyQuests(profile)
+    if not (Toggles.ToggleAutoQuestClaim and Toggles.ToggleAutoQuestClaim.Value) then
+        return 0
+    end
+    if typeof(profile) ~= "table" or typeof(profile.quests) ~= "table" then
+        return 0
+    end
+
+    local constants = getQuestConstants()
+    local questList = constants and constants.QUESTS
+    local progress = profile.quests.progress
+    local claimed = profile.quests.claimed
+    if typeof(questList) ~= "table" or typeof(progress) ~= "table" or typeof(claimed) ~= "table" then
+        return 0
+    end
+
+    local remote = getRemote("ClaimQuest", 10)
+    if not remote then
+        Extra.setQuestClaimStatus("ClaimQuest remote was not found.")
+        return 0
+    end
+
+    local fired = 0
+    for _, quest in pairs(questList) do
+        if typeof(quest) == "table" and quest.id ~= nil and claimed[quest.id] ~= true then
+            local goal = tonumber(quest.goal)
+            local value = tonumber(progress[quest.statKey]) or 0
+            local key = "quest:" .. tostring(quest.id)
+            if goal and value >= goal and questClaimReady(key) then
+                markQuestClaimAttempt(key)
+                remote:FireServer(quest.id)
+                fired += 1
+                Marker:SetAttribute("LastQuestClaimId", tostring(quest.id))
+                Marker:SetAttribute("LastQuestClaimAt", Workspace:GetServerTimeNow())
+                task.wait(0.15)
+            end
+        end
+    end
+
+    return fired
+end
+
+function Extra.claimReadyQuestRewards()
+    local profile = getProfileData()
+    if typeof(profile) ~= "table" then
+        Extra.setQuestClaimStatus("Waiting for profile data.")
+        return 0
+    end
+
+    local daily = Extra.claimReadyDailyQuests(profile)
+    local regular = Extra.claimReadyQuests(profile)
+    local total = daily + regular
+    if total > 0 then
+        Extra.setQuestClaimStatus("Claim fired: " .. tostring(daily) .. " daily, " .. tostring(regular) .. " quest.")
+    else
+        Extra.setQuestClaimStatus("No ready quest rewards.")
+    end
+
+    return total
+end
+
+function Extra.connectQuestClaimEvents()
+    disconnect("QuestClaimed")
+    disconnect("DailyQuestClaimed")
+
+    local questClaimed = getRemote("QuestClaimed", 5)
+    if questClaimed then
+        Connections.QuestClaimed = questClaimed.OnClientEvent:Connect(function(...)
+            Marker:SetAttribute("QuestClaimedAt", Workspace:GetServerTimeNow())
+            Marker:SetAttribute("QuestClaimedArgs", select("#", ...))
+            Extra.setQuestClaimStatus("Quest claim confirmed.")
+        end)
+    end
+
+    local dailyClaimed = getRemote("DailyQuestClaimed", 5)
+    if dailyClaimed then
+        Connections.DailyQuestClaimed = dailyClaimed.OnClientEvent:Connect(function(...)
+            Marker:SetAttribute("DailyQuestClaimedAt", Workspace:GetServerTimeNow())
+            Marker:SetAttribute("DailyQuestClaimedArgs", select("#", ...))
+            Extra.setQuestClaimStatus("Daily quest claim confirmed.")
+        end)
+    end
+end
+
+function Extra.startAutoQuestClaims()
+    stopTask("AutoQuestClaims")
+    Extra.connectQuestClaimEvents()
+    Tasks.AutoQuestClaims = task.spawn(function()
+        while Marker:GetAttribute("Session") == Session and Extra.autoQuestClaimsEnabled() do
+            local fired = Extra.claimReadyQuestRewards()
+            task.wait(fired > 0 and 5 or 15)
+        end
+    end)
+end
+
+function Extra.stopAutoQuestClaims()
+    stopTask("AutoQuestClaims")
+    disconnect("QuestClaimed")
+    disconnect("DailyQuestClaimed")
+    Extra.setQuestClaimStatus("Auto quest claims are off.")
+end
+
+function Extra.refreshAutoQuestClaims()
+    if Extra.autoQuestClaimsEnabled() then
+        Extra.startAutoQuestClaims()
+    else
+        Extra.stopAutoQuestClaims()
+    end
+end
+end
+
 local function fireGodlyOrbClaim(count, delaySeconds)
     local remote = getGodlyOrbCollectedRemote()
     if not remote then
@@ -2950,6 +3208,13 @@ function Extra.touchMidasGoldBar(position)
 end
 
 local function collectMidasGoldBar(id, position)
+    if Extra.bossHasMovementPriority and Extra.bossHasMovementPriority() then
+        MidasMovePosition = nil
+        MidasMoveUntil = 0
+        Marker:SetAttribute("MidasSkippedForBoss", Workspace:GetServerTimeNow())
+        return false
+    end
+
     if typeof(id) ~= "string" and typeof(id) ~= "number" then
         return false
     end
@@ -7217,6 +7482,30 @@ FallingStarBox:AddCheckbox("ToggleAutoCollectFallingStars", {
     Default = true,
 })
 
+do
+local QuestClaimBox = Tabs.Automation:AddRightGroupbox("Quest Claims", "badge-check")
+QuestClaimBox:AddSlider("AutoQuestClaimRetrySeconds", {
+    Text = "Claim Retry Cooldown",
+    Min = 30,
+    Max = 600,
+    Default = 120,
+    Rounding = 0,
+    Suffix = " s",
+})
+QuestClaimBox:AddCheckbox("ToggleAutoDailyQuestClaim", {
+    Text = "Auto Daily Quest Claims",
+    Default = true,
+})
+QuestClaimBox:AddCheckbox("ToggleAutoQuestClaim", {
+    Text = "Auto Quest/Achievement Claims",
+    Default = true,
+})
+Extra.QuestClaimStatusLabel = QuestClaimBox:AddLabel({
+    Text = "Auto quest claims are off.",
+    DoesWrap = true,
+})
+end
+
 local BossBox = Tabs.Automation:AddRightGroupbox("Boss", "swords")
 BossBox:AddSlider("AutoBossStartRetrySeconds", {
     Text = "Start Retry",
@@ -7637,6 +7926,12 @@ end)
 Toggles.ToggleAutoCollectFallingStars:OnChanged(function()
     refreshFallingStarAutomation()
 end)
+Toggles.ToggleAutoDailyQuestClaim:OnChanged(function()
+    Extra.refreshAutoQuestClaims()
+end)
+Toggles.ToggleAutoQuestClaim:OnChanged(function()
+    Extra.refreshAutoQuestClaims()
+end)
 Toggles.ToggleAutoBossStart:OnChanged(function()
     Extra.refreshAutoBoss()
 end)
@@ -7910,6 +8205,9 @@ if Toggles.ToggleAutoCrate.Value then
 end
 if Toggles.ToggleAutoFallingStars.Value or Toggles.ToggleAutoCollectFallingStars.Value then
     startFallingStarAutomation()
+end
+if Extra.autoQuestClaimsEnabled() then
+    Extra.startAutoQuestClaims()
 end
 if Extra.bossAutomationEnabled() then
     Extra.startAutoBossLoop()
