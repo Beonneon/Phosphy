@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.20",
+    Version = "1.3.21",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -94,6 +94,7 @@ local Extra = {
     BossSplitPickups = {},
     BossCardPickPending = {},
     BossLastVictoryPayload = nil,
+    BossLastVictoryCloseAt = 0,
     BossStatusLabel = nil,
     UndeadMiniBoss = nil,
     UndeadLastStateRequestAt = 0,
@@ -2030,6 +2031,7 @@ function Extra.bossAutomationEnabled()
         or (Toggles.ToggleAutoBossFight and Toggles.ToggleAutoBossFight.Value)
         or (Toggles.ToggleAutoBossPayOpen and Toggles.ToggleAutoBossPayOpen.Value)
         or (Toggles.ToggleAutoBossBuyCards and Toggles.ToggleAutoBossBuyCards.Value)
+        or (Toggles.ToggleAutoBossCloseVictory and Toggles.ToggleAutoBossCloseVictory.Value)
 end
 
 function Extra.bossFightEnabled()
@@ -2462,6 +2464,37 @@ function Extra.bossCardLabel(card, id)
     return tostring(Extra.BossCardIdToLabel[id] or id)
 end
 
+function Extra.closeBossVictoryRewards(reason, force)
+    local now = os.clock()
+    if not force and now - (Extra.BossLastVictoryCloseAt or 0) < 3 then
+        return false
+    end
+    Extra.BossLastVictoryCloseAt = now
+
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if playerGui then
+        for _, name in ipairs({ "BossVictoryWarning", "BossVictoryRewards", "BossRewardChestBurst" }) do
+            local gui = playerGui:FindFirstChild(name)
+            if gui then
+                pcall(function()
+                    gui:Destroy()
+                end)
+            end
+        end
+    end
+
+    local closeRemote = getBossRemote("BossVictoryClosed")
+    if closeRemote then
+        closeRemote:FireServer()
+        Marker:SetAttribute("BossVictoryClosedAt", Workspace:GetServerTimeNow())
+        Marker:SetAttribute("BossVictoryClosedReason", tostring(reason or "auto"))
+        return true
+    end
+
+    Extra.setBossStatus("BossVictoryClosed remote was not found.")
+    return false
+end
+
 function Extra.pickBossVictoryCard(payload)
     if not Extra.bossCardPickEnabled() then
         return false
@@ -2557,6 +2590,12 @@ function Extra.handleBossUpgradeResult(ok, payload)
         Extra.setBossStatus("Boss card bought: " .. Extra.bossCardLabel(nil, id or "upgrade") .. ".")
     else
         Extra.setBossStatus("Boss card buy failed: " .. tostring(reason or "unknown") .. ".")
+    end
+
+    if Toggles.ToggleAutoBossCloseVictory and Toggles.ToggleAutoBossCloseVictory.Value then
+        task.delay(ok and 0.35 or 0.75, function()
+            Extra.closeBossVictoryRewards(ok and "card-result" or "card-failed", false)
+        end)
     end
 end
 
@@ -2798,12 +2837,8 @@ function Extra.connectBossEvents()
             local payload = select(1, ...)
             local pickedCard = Extra.pickBossVictoryCard(payload)
             if Toggles.ToggleAutoBossCloseVictory and Toggles.ToggleAutoBossCloseVictory.Value then
-                task.delay(pickedCard and 1.5 or 1, function()
-                    local closeRemote = getBossRemote("BossVictoryClosed")
-                    if closeRemote then
-                        closeRemote:FireServer()
-                        Marker:SetAttribute("BossVictoryClosedAt", Workspace:GetServerTimeNow())
-                    end
+                task.delay(pickedCard and 2.5 or 1, function()
+                    Extra.closeBossVictoryRewards(pickedCard and "victory-fallback" or "victory", false)
                 end)
             end
         end)
@@ -7643,6 +7678,9 @@ Toggles.ToggleAutoBossRandomCard:OnChanged(function()
     if Extra.bossAutomationEnabled() then
         Extra.refreshAutoBoss()
     end
+end)
+Toggles.ToggleAutoBossCloseVictory:OnChanged(function()
+    Extra.refreshAutoBoss()
 end)
 Toggles.ToggleAutoUndeadBoss:OnChanged(function()
     Extra.refreshAutoUndead()
