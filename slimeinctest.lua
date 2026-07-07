@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.25",
+    Version = "1.3.26",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -2803,10 +2803,14 @@ function Extra.fireBossCardUpgrade(card)
     Marker:SetAttribute("BossLastCardPick", id)
     Marker:SetAttribute("BossLastCardPickAt", Workspace:GetServerTimeNow())
     remote:FireServer(id)
-    if coins then
-        Extra.setBossCoinCount(coins - cost, "estimate")
-    end
     return true, id, cost
+end
+
+function Extra.bossCardCooldownReason(reason)
+    local text = tostring(reason or ""):lower()
+    return string.find(text, "slow", 1, true) ~= nil
+        or string.find(text, "cooldown", 1, true) ~= nil
+        or string.find(text, "too fast", 1, true) ~= nil
 end
 
 function Extra.closeBossVictoryRewards(reason, force)
@@ -2889,7 +2893,7 @@ function Extra.startBossCardSpendLoop(payload)
                 break
             end
 
-            local burst = math.max(1, math.floor(getNumberOption("AutoBossCardSpendBurst", 20)))
+            local burst = 1
             if coins then
                 burst = math.min(burst, math.max(1, math.floor(coins / cost)))
                 unknownCoinReads = 0
@@ -2927,10 +2931,26 @@ function Extra.startBossCardSpendLoop(payload)
                 .. Extra.formatBossCoins(Extra.BossKillCoins)
                 .. ".")
 
-            task.wait(math.clamp(getNumberOption("AutoBossCardSpendDelayMs", 50) / 1000, 0, 2))
+            local delaySeconds = math.max(0.2, math.clamp(getNumberOption("AutoBossCardSpendDelayMs", 200) / 1000, 0, 2))
+            local waitStarted = os.clock()
+            while Extra.BossLastCardBuyOk == nil and os.clock() - waitStarted < delaySeconds do
+                task.wait(0.03)
+            end
+            local waited = os.clock() - waitStarted
+            if waited < delaySeconds then
+                task.wait(delaySeconds - waited)
+            end
+
             if Extra.BossLastCardBuyOk == false then
-                Extra.setBossStatus("Boss card spender stopped after server rejected a buy.")
-                break
+                if Extra.bossCardCooldownReason(Extra.BossLastCardFailReason) then
+                    Extra.setBossStatus("Boss card spender slowed down by server. Retrying at 1x/"
+                        .. tostring(math.floor(delaySeconds * 1000))
+                        .. "ms.")
+                    task.wait(math.max(0.6, delaySeconds * 2))
+                else
+                    Extra.setBossStatus("Boss card spender stopped after server rejected a buy.")
+                    break
+                end
             end
         end
 
@@ -2968,6 +2988,8 @@ function Extra.handleBossUpgradeResult(ok, payload)
     end
 
     Extra.BossLastCardBuyOk = ok == true
+    Extra.BossLastCardFailReason = ok and nil or tostring(reason or "unknown")
+    Extra.BossLastCardResultAt = os.clock()
     if id ~= nil then
         Extra.BossCardPickPending[tostring(id)] = nil
     else
@@ -2984,7 +3006,9 @@ function Extra.handleBossUpgradeResult(ok, payload)
                 .. ".")
         end
     else
-        Extra.setBossStatus("Boss card buy failed: " .. tostring(reason or "unknown") .. ".")
+        if not (Extra.BossCardSpendActive and Extra.bossCardCooldownReason(reason)) then
+            Extra.setBossStatus("Boss card buy failed: " .. tostring(reason or "unknown") .. ".")
+        end
     end
 
     if Toggles.ToggleAutoBossCloseVictory and Toggles.ToggleAutoBossCloseVictory.Value and not Extra.BossCardSpendActive then
@@ -7890,15 +7914,15 @@ BossBox:AddSlider("AutoUndeadHitDelayMs", {
 BossBox:AddSlider("AutoBossCardSpendBurst", {
     Text = "Card Spend Burst",
     Min = 1,
-    Max = 100,
-    Default = 20,
+    Max = 1,
+    Default = 1,
     Rounding = 0,
 })
 BossBox:AddSlider("AutoBossCardSpendDelayMs", {
     Text = "Card Spend Delay",
-    Min = 0,
-    Max = 500,
-    Default = 50,
+    Min = 200,
+    Max = 1000,
+    Default = 200,
     Rounding = 0,
     Suffix = " ms",
 })
