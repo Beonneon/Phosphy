@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.26",
+    Version = "1.3.27",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -130,6 +130,11 @@ local Extra = {
     AmuletVisualConnectionsDisabled = false,
     StardustMachineRequestCooldown = 60,
     StardustReadyPrinted = false,
+    FallingStarQueue = {},
+    FallingStarQueuedKeys = {},
+    FallingStarCollectBusy = false,
+    FallingStarAwardSerial = 0,
+    FallingStarLastAwardClock = 0,
 }
 local ReadyActionLastFiredAt = {}
 local PotionRequestedUntil = {}
@@ -1680,7 +1685,48 @@ local function collectFallingStarPart(part)
     return true
 end
 
-local function collectFallingStarPosition(position, holdSeconds)
+function Extra.fallingStarQueueKey(position)
+    if typeof(position) ~= "Vector3" then
+        return nil
+    end
+
+    return string.format("%.1f:%.1f:%.1f", position.X, position.Y, position.Z)
+end
+
+function Extra.updateFallingStarQueueAttributes()
+    Marker:SetAttribute("FallingStarQueueLength", #Extra.FallingStarQueue)
+    Marker:SetAttribute("FallingStarCollectBusy", Extra.FallingStarCollectBusy)
+end
+
+function Extra.queueFallingStarPosition(position, readyDelay)
+    if typeof(position) ~= "Vector3" then
+        return false
+    end
+
+    local key = Extra.fallingStarQueueKey(position)
+    if not key or Extra.FallingStarQueuedKeys[key] then
+        return false
+    end
+
+    Extra.FallingStarQueuedKeys[key] = true
+    Extra.FallingStarQueue[#Extra.FallingStarQueue + 1] = {
+        key = key,
+        position = position,
+        readyAt = os.clock() + math.max(0, tonumber(readyDelay) or 0),
+    }
+
+    Marker:SetAttribute("FallingStarQueuedPosition", tostring(position))
+    Extra.updateFallingStarQueueAttributes()
+    return true
+end
+
+function Extra.clearFallingStarQueue()
+    table.clear(Extra.FallingStarQueue)
+    table.clear(Extra.FallingStarQueuedKeys)
+    Extra.updateFallingStarQueueAttributes()
+end
+
+local function collectFallingStarPosition(position, holdSeconds, waitForAward)
     if Extra.bossHasMovementPriority and Extra.bossHasMovementPriority() then
         return false
     end
@@ -1691,17 +1737,92 @@ local function collectFallingStarPosition(position, holdSeconds)
     end
 
     holdSeconds = math.max(0.4, tonumber(holdSeconds) or 0.4)
+    local startAwardSerial = Extra.FallingStarAwardSerial
+    local deadline = os.clock() + holdSeconds
+
     setFallingStarMovementTarget(position, holdSeconds)
-    root.CFrame = CFrame.new(position + Vector3.new(0, 3, 0))
-    task.wait(math.min(0.25, holdSeconds))
+    while os.clock() < deadline do
+        if Extra.bossHasMovementPriority and Extra.bossHasMovementPriority() then
+            return false
+        end
+
+        root = getRoot()
+        if not root then
+            return false
+        end
+
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+        root.CFrame = CFrame.new(position + Vector3.new(0, 3, 0))
+
+        if waitForAward and Extra.FallingStarAwardSerial > startAwardSerial then
+            task.wait(0.15)
+            break
+        end
+
+        task.wait(0.05)
+    end
+
+    FallingStarMovePosition = nil
+    FallingStarMoveUntil = 0
 
     return true
+end
+
+function Extra.processFallingStarQueue()
+    if Extra.FallingStarCollectBusy then
+        Extra.updateFallingStarQueueAttributes()
+        return
+    end
+
+    Extra.FallingStarCollectBusy = true
+    Extra.updateFallingStarQueueAttributes()
+
+    task.spawn(function()
+        while #Extra.FallingStarQueue > 0 do
+            if not (Toggles.ToggleAutoCollectFallingStars and Toggles.ToggleAutoCollectFallingStars.Value) then
+                break
+            end
+
+            if Extra.bossHasMovementPriority and Extra.bossHasMovementPriority() then
+                break
+            end
+
+            local item = table.remove(Extra.FallingStarQueue, 1)
+            if item and item.key then
+                Extra.FallingStarQueuedKeys[item.key] = nil
+            end
+
+            Extra.updateFallingStarQueueAttributes()
+
+            if item and typeof(item.position) == "Vector3" then
+                while os.clock() < (item.readyAt or 0) do
+                    if not (Toggles.ToggleAutoCollectFallingStars and Toggles.ToggleAutoCollectFallingStars.Value) then
+                        break
+                    end
+                    if Extra.bossHasMovementPriority and Extra.bossHasMovementPriority() then
+                        break
+                    end
+                    task.wait(math.min(0.05, math.max(0.01, (item.readyAt or 0) - os.clock())))
+                end
+
+                Marker:SetAttribute("FallingStarCurrentQueuePosition", tostring(item.position))
+                Marker:SetAttribute("FallingStarCurrentQueueStartedAt", Workspace:GetServerTimeNow())
+                collectFallingStarPosition(item.position, 4.25, true)
+                task.wait(0.1)
+            end
+        end
+
+        Extra.FallingStarCollectBusy = false
+        Extra.updateFallingStarQueueAttributes()
+    end)
 end
 
 local function collectFallingStars(position)
     if Extra.bossHasMovementPriority and Extra.bossHasMovementPriority() then
         FallingStarMovePosition = nil
         FallingStarMoveUntil = 0
+        Extra.clearFallingStarQueue()
         Marker:SetAttribute("FallingStarLastCollectCount", 0)
         Marker:SetAttribute("FallingStarSkippedForBoss", Workspace:GetServerTimeNow())
         return 0
@@ -1710,10 +1831,16 @@ local function collectFallingStars(position)
     local maxStars = 8
     local collected = 0
 
-    if position and collectFallingStarPosition(position, 3) then
-        Marker:SetAttribute("FallingStarLastCollectCount", 1)
+    if position then
+        Extra.queueFallingStarPosition(position, 0)
+        Extra.processFallingStarQueue()
+        Marker:SetAttribute("FallingStarLastCollectCount", #Extra.FallingStarQueue)
         Marker:SetAttribute("FallingStarLastCollectAt", Workspace:GetServerTimeNow())
-        return 1
+        return 0
+    end
+
+    if Extra.FallingStarCollectBusy then
+        return 0
     end
 
     if FallingStarMovePosition and os.clock() <= FallingStarMoveUntil then
@@ -1878,17 +2005,25 @@ local function startFallingStarListeners()
                 Marker:SetAttribute("FallingStarDropPosition", tostring(position))
             end
 
-            task.delay(7.5, function()
-                if Toggles.ToggleAutoCollectFallingStars and Toggles.ToggleAutoCollectFallingStars.Value then
-                    collectFallingStars(position)
-                end
-            end)
+            if position then
+                Extra.queueFallingStarPosition(position, 7.5)
+                Extra.processFallingStarQueue()
+            else
+                task.delay(7.5, function()
+                    if Toggles.ToggleAutoCollectFallingStars and Toggles.ToggleAutoCollectFallingStars.Value then
+                        collectFallingStars()
+                    end
+                end)
+            end
         end)
     end
 
     local awardedRemote = getFallingStarAwardedRemote()
     if awardedRemote then
         Connections.FallingStarAwarded = awardedRemote.OnClientEvent:Connect(function(...)
+            Extra.FallingStarAwardSerial += 1
+            Extra.FallingStarLastAwardClock = os.clock()
+            Marker:SetAttribute("FallingStarAwardSerial", Extra.FallingStarAwardSerial)
             Marker:SetAttribute("FallingStarLastAwardAt", Workspace:GetServerTimeNow())
             Marker:SetAttribute("FallingStarLastAwardArgs", select("#", ...))
         end)
@@ -1899,6 +2034,8 @@ local function stopFallingStarAutomation()
     stopTask("FallingStars")
     disconnect("StardustStarFalling")
     disconnect("FallingStarAwarded")
+    Extra.FallingStarCollectBusy = false
+    Extra.clearFallingStarQueue()
 end
 
 local function startFallingStarAutomation()
