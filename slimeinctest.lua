@@ -68,7 +68,7 @@ local AmuletStatusLabel = nil
 local FastAmuletsRequested = false
 local DataController = nil
 local Extra = {
-    Version = "1.3.24",
+    Version = "1.3.25",
     PerfLighting = game:GetService("Lighting"),
     BlessingActionPending = false,
     BlessingActionSerial = 0,
@@ -2699,6 +2699,30 @@ function Extra.bossCardLabel(card, id)
     return tostring(Extra.BossCardIdToLabel[id] or id)
 end
 
+function Extra.defaultBossCard(id)
+    if not id or id == "---" then
+        return nil
+    end
+
+    return {
+        id = tostring(id),
+        title = Extra.BossCardIdToLabel[id] or tostring(id),
+        cost = 1,
+    }
+end
+
+function Extra.knownBossCards()
+    local cards = {}
+    for _, label in ipairs(Extra.BossCardValues) do
+        local id = Extra.BossCardLabelToId[label] or label
+        local card = Extra.defaultBossCard(id)
+        if card then
+            table.insert(cards, card)
+        end
+    end
+    return cards
+end
+
 function Extra.bossVictoryCards(payload)
     local cards = {}
     if typeof(payload) ~= "table" then
@@ -2713,6 +2737,22 @@ function Extra.bossVictoryCards(payload)
         end
     end
     return cards
+end
+
+function Extra.bossSpendCards(payload)
+    if not (Toggles.ToggleAutoBossRandomCard and Toggles.ToggleAutoBossRandomCard.Value) then
+        local selectedCard = Extra.defaultBossCard(Extra.selectedBossCardId())
+        if selectedCard then
+            return { selectedCard }
+        end
+    end
+
+    local cards = Extra.bossVictoryCards(payload)
+    if #cards > 0 then
+        return cards
+    end
+
+    return Extra.knownBossCards()
 end
 
 function Extra.chooseBossVictoryCard(cards)
@@ -2804,21 +2844,22 @@ function Extra.startBossCardSpendLoop(payload)
     if not Extra.bossCardPickEnabled() then
         return false
     end
-    if typeof(payload) ~= "table" then
-        Extra.setBossStatus("Boss victory payload had no card table.")
-        return false
+
+    if typeof(payload) == "table" then
+        Extra.BossLastVictoryPayload = payload
+    else
+        payload = Extra.BossLastVictoryPayload
     end
 
-    Extra.BossLastVictoryPayload = payload
-    if tonumber(payload.bossKillCoins) then
+    if typeof(payload) == "table" and tonumber(payload.bossKillCoins) then
         Extra.setBossCoinCount(payload.bossKillCoins, "victory")
     else
         Extra.refreshBossCoinCount()
     end
 
-    local cards = Extra.bossVictoryCards(payload)
+    local cards = Extra.bossSpendCards(payload)
     if #cards <= 0 then
-        Extra.setBossStatus("Boss victory had no offered cards.")
+        Extra.setBossStatus("Boss card spender has no card id to buy.")
         return false
     end
 
@@ -2830,10 +2871,10 @@ function Extra.startBossCardSpendLoop(payload)
 
         while Marker:GetAttribute("Session") == Session and Extra.bossCardPickEnabled() do
             local activePayload = Extra.BossLastVictoryPayload
-            local activeCards = Extra.bossVictoryCards(activePayload)
+            local activeCards = Extra.bossSpendCards(activePayload)
             local chosen = Extra.chooseBossVictoryCard(activeCards)
             if not chosen then
-                Extra.setBossStatus("Boss card spender stopped: no offered cards.")
+                Extra.setBossStatus("Boss card spender stopped: no card id.")
                 break
             end
 
@@ -3218,6 +3259,13 @@ function Extra.startAutoBossLoop()
                 Extra.fireBossStart(false)
             end
 
+            if Extra.bossCardPickEnabled() and not Tasks.BossCardSpend then
+                Extra.refreshBossCoinCount()
+                if (Extra.BossKillCoins or 0) > 0 then
+                    Extra.startBossCardSpendLoop(Extra.BossLastVictoryPayload)
+                end
+            end
+
             if Extra.bossMoveEnabled() then
                 local status = Extra.BossState and Extra.BossState.status or "unknown"
                 if status == "active" or status == "spawning" then
@@ -3233,6 +3281,10 @@ end
 function Extra.stopAutoBossLoop()
     stopTask("AutoBoss")
     Extra.disconnectBossEvents()
+    if not Extra.bossCardPickEnabled() then
+        stopTask("BossCardSpend")
+        Extra.BossCardSpendActive = false
+    end
     if Extra.BossMoveReason ~= "Undead Mini Boss" or not Extra.undeadEnabled() then
         Extra.BossMoveCFrame = nil
         Extra.BossMoveUntil = 0
@@ -7875,6 +7927,16 @@ BossBox:AddButton({
         end)
     end,
 })
+BossBox:AddButton({
+    Text = "Spend Boss Coins Now",
+    Func = function()
+        task.spawn(function()
+            Extra.connectBossEvents()
+            Extra.refreshBossCoinCount()
+            notify("Boss card spender started: " .. tostring(Extra.startBossCardSpendLoop(Extra.BossLastVictoryPayload)))
+        end)
+    end,
+})
 BossBox:AddDropdown("BossCardPick", {
     Text = "Card Pick",
     Values = Extra.BossCardValues,
@@ -8290,7 +8352,8 @@ Toggles.ToggleAutoBossBuyCards:OnChanged(function(state)
     if not state then
         stopTask("BossCardSpend")
         Extra.BossCardSpendActive = false
-    elseif typeof(Extra.BossLastVictoryPayload) == "table" then
+    else
+        Extra.refreshBossCoinCount()
         Extra.startBossCardSpendLoop(Extra.BossLastVictoryPayload)
     end
     Extra.refreshAutoBoss()
