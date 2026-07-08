@@ -43,6 +43,7 @@ local ThemeManager = loadDependency("ThemeManager.lua", {
 local SaveManager = loadDependency("SaveManagerV3.lua", phosphyDependency("SaveManagerV3.lua"))
 
 local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualUser = game:GetService("VirtualUser")
 local Workspace = game:GetService("Workspace")
@@ -78,22 +79,29 @@ local State = {
     keptOld = 0,
     selectedNew = 0,
     loadingSettings = false,
+    lastWebhookAt = 0,
 }
 
 local Extra = {
     RemoteRoot = nil,
     VisualConnectionsDisabled = false,
     SuppressedConnections = {},
+    CachedAmuletsGui = nil,
+    LastFullGuiScanAt = 0,
+    LastVisualCleanupAt = 0,
+    WebhookSent = {},
     ComboSlots = {},
     ComboSlotLimit = 6,
 }
 
 local Config = {
-    PickTimeout = 0.65,
-    PickRetryDelay = 0.07,
+    PickTimeout = 0.45,
+    PickRetryDelay = 0.11,
     SlowRetryDelay = 0.22,
     MaxPickRetries = 60,
     RollTimeout = 3,
+    StatusThrottle = 0.35,
+    AutoFallbackWait = 0.18,
 }
 
 local CountValues = { "1", "2", "3", "4" }
@@ -209,6 +217,21 @@ local function notify(message)
     end
 end
 
+local function readGlobalString(name)
+    if typeof(getgenv) == "function" then
+        local ok, env = pcall(getgenv)
+        if ok and typeof(env) == "table" and typeof(env[name]) == "string" then
+            return env[name]
+        end
+    end
+
+    if typeof(_G) == "table" and typeof(_G[name]) == "string" then
+        return _G[name]
+    end
+
+    return ""
+end
+
 local function stopTask(name)
     local taskRef = Tasks[name]
     Tasks[name] = nil
@@ -272,6 +295,10 @@ local function getRollDelay()
     return math.max(0, getNumberOption("AutoAmuletRollDelayMs", 0) / 1000)
 end
 
+local function getStatusEvery()
+    return math.max(1, math.floor(getNumberOption("AutoAmuletStatusEvery", 10)))
+end
+
 local function setStatus(message, force)
     local text = tostring(message or State.statusText or State.latestSummary or "No amulet roll yet.")
     State.statusText = text
@@ -279,7 +306,7 @@ local function setStatus(message, force)
         return
     end
 
-    if not force and State.lastStatusAt and os.clock() - State.lastStatusAt < 0.15 then
+    if not force and State.lastStatusAt and os.clock() - State.lastStatusAt < Config.StatusThrottle then
         return
     end
 
@@ -291,6 +318,15 @@ end
 
 local function isAutoRolling()
     return Toggles.ToggleAutoAmuletRoll and Toggles.ToggleAutoAmuletRoll.Value == true
+end
+
+local function shouldShowAutoStatus()
+    if not isAutoRolling() then
+        return true
+    end
+
+    local every = getStatusEvery()
+    return State.rolls <= 3 or State.rolls % every == 0
 end
 
 local function setAutoRolling(enabled)
@@ -770,20 +806,47 @@ end
 local function cleanupAmuletRollVisuals()
     local playerGui = LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")
     if playerGui then
-        for _, item in ipairs(playerGui:GetDescendants()) do
-            if item.Name == "DroppedAmuletsGui" and item:IsA("GuiObject") then
-                item.Visible = false
-                item.BackgroundTransparency = 1
-            elseif (item.Name == "LeftAmulets" or item.Name == "RightAmulets") and item:IsA("GuiObject") then
-                for _, child in ipairs(item:GetChildren()) do
+        local function clearContainer(container)
+            if container and container:IsA("GuiObject") then
+                for _, child in ipairs(container:GetChildren()) do
                     if child:IsA("GuiObject") then
                         child:Destroy()
                     end
                 end
-            elseif item.Name == "Background" and item:IsA("GuiObject") then
-                item.BackgroundTransparency = 1
-                if item:IsA("ImageLabel") or item:IsA("ImageButton") then
-                    item.ImageTransparency = 1
+            end
+        end
+
+        local function hideGuiObject(guiObject)
+            if guiObject and guiObject:IsA("GuiObject") then
+                guiObject.Visible = false
+                guiObject.BackgroundTransparency = 1
+                if guiObject:IsA("ImageLabel") or guiObject:IsA("ImageButton") then
+                    guiObject.ImageTransparency = 1
+                end
+            end
+        end
+
+        local amuletsGui = Extra.CachedAmuletsGui
+        if not amuletsGui or not amuletsGui.Parent then
+            amuletsGui = playerGui:FindFirstChild("AmuletsGui")
+            Extra.CachedAmuletsGui = amuletsGui
+        end
+
+        if amuletsGui then
+            local dropped = amuletsGui:FindFirstChild("DroppedAmuletsGui", true)
+            hideGuiObject(dropped)
+            clearContainer(dropped and dropped:FindFirstChild("LeftAmulets"))
+            clearContainer(dropped and dropped:FindFirstChild("RightAmulets"))
+            hideGuiObject(amuletsGui:FindFirstChild("Background"))
+        elseif os.clock() - Extra.LastFullGuiScanAt > 1 then
+            Extra.LastFullGuiScanAt = os.clock()
+            for _, item in ipairs(playerGui:GetDescendants()) do
+                if item.Name == "DroppedAmuletsGui" then
+                    hideGuiObject(item)
+                elseif item.Name == "LeftAmulets" or item.Name == "RightAmulets" then
+                    clearContainer(item)
+                elseif item.Name == "Background" then
+                    hideGuiObject(item)
                 end
             end
         end
@@ -935,21 +998,28 @@ local function queueVisualCleanup()
         return
     end
 
+    local now = os.clock()
+    if now - Extra.LastVisualCleanupAt < 0.05 then
+        return
+    end
+    Extra.LastVisualCleanupAt = now
+
     cleanupAmuletRollVisuals()
-    task.defer(cleanupAmuletRollVisuals)
-    task.delay(0.05, cleanupAmuletRollVisuals)
-    task.delay(0.15, cleanupAmuletRollVisuals)
+    task.delay(0.1, cleanupAmuletRollVisuals)
+    if not Extra.VisualConnectionsDisabled then
+        task.delay(0.25, cleanupAmuletRollVisuals)
+    end
 end
 
 local function refreshVisualSuppression()
     if shouldHideVisuals() and isAutoRolling() then
-        disableAmuletVisualConnections()
+        local disabled = disableAmuletVisualConnections()
         queueVisualCleanup()
-        if not Tasks.VisualCleanup then
+        if not disabled and not Tasks.VisualCleanup then
             Tasks.VisualCleanup = task.spawn(function()
                 while State.active and shouldHideVisuals() and isAutoRolling() do
                     cleanupAmuletRollVisuals()
-                    task.wait(0.08)
+                    task.wait(0.25)
                 end
                 Tasks.VisualCleanup = nil
             end)
@@ -1010,6 +1080,125 @@ local function scheduleNextRoll(delaySeconds)
     end)
 end
 
+local function getWebhookUrl()
+    local option = Options.WebhookUrlInput
+    local value = option and option.Value
+    if typeof(value) ~= "string" or value == "" then
+        value = readGlobalString("AutoAmuletWebhook")
+    end
+
+    value = tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if value == "" then
+        return ""
+    end
+
+    if not value:match("^https://discord%.com/api/webhooks/")
+        and not value:match("^https://discordapp%.com/api/webhooks/") then
+        return ""
+    end
+
+    return value
+end
+
+local function getRequestFunction()
+    if typeof(request) == "function" then
+        return request
+    end
+    if typeof(http_request) == "function" then
+        return http_request
+    end
+    if typeof(syn) == "table" and typeof(syn.request) == "function" then
+        return syn.request
+    end
+    if typeof(http) == "table" and typeof(http.request) == "function" then
+        return http.request
+    end
+    return nil
+end
+
+local function shortText(text, maxLength)
+    text = tostring(text or "")
+    maxLength = maxLength or 1500
+    if #text <= maxLength then
+        return text
+    end
+    return text:sub(1, maxLength - 3) .. "..."
+end
+
+local function sendWebhook(eventName, description, rollId, toggleId)
+    local toggle = Toggles[toggleId or "ToggleWebhookOnTarget"]
+    if not toggle or toggle.Value ~= true then
+        return false
+    end
+
+    local url = getWebhookUrl()
+    if url == "" then
+        return false
+    end
+
+    local eventKey = tostring(eventName) .. ":" .. tostring(rollId or os.clock())
+    if Extra.WebhookSent[eventKey] then
+        return false
+    end
+    Extra.WebhookSent[eventKey] = true
+
+    task.spawn(function()
+        local requestFunction = getRequestFunction()
+        if not requestFunction then
+            setStatus("Webhook request function unavailable.\n" .. tostring(State.latestSummary), true)
+            return
+        end
+
+        local now = os.clock()
+        if now - State.lastWebhookAt < 0.5 then
+            task.wait(0.5 - (now - State.lastWebhookAt))
+        end
+        State.lastWebhookAt = os.clock()
+
+        local payload = {
+            username = "Auto Amulet",
+            embeds = {
+                {
+                    title = tostring(eventName),
+                    color = 51444,
+                    description = shortText(description, 3500),
+                    fields = {
+                        {
+                            name = "Rolls",
+                            value = tostring(State.rolls),
+                            inline = true,
+                        },
+                        {
+                            name = "Selected New",
+                            value = tostring(State.selectedNew),
+                            inline = true,
+                        },
+                        {
+                            name = "Kept Old",
+                            value = tostring(State.keptOld),
+                            inline = true,
+                        },
+                    },
+                    timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+                },
+            },
+        }
+
+        local ok, result = pcall(requestFunction, {
+            Url = url,
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "application/json",
+            },
+            Body = HttpService:JSONEncode(payload),
+        })
+        if not ok then
+            warn("[AutoAmulet] webhook failed: " .. tostring(result))
+        end
+    end)
+    return true
+end
+
 local function retryPick(choice, reason, delaySeconds)
     if not State.choicePending or State.latestRollId == nil then
         return false
@@ -1030,12 +1219,14 @@ local function retryPick(choice, reason, delaySeconds)
 
     local rollId = State.latestRollId
     local retryNumber = State.pickRetry
-    setStatus(
-        "Pick " .. tostring(choice) .. " retry " .. tostring(retryNumber)
-            .. " on roll " .. tostring(rollId) .. ": " .. tostring(reason or "retrying")
-            .. "\n" .. tostring(State.latestSummary),
-        true
-    )
+    if retryNumber <= 3 or retryNumber % 5 == 0 then
+        setStatus(
+            "Pick " .. tostring(choice) .. " retry " .. tostring(retryNumber)
+                .. " on roll " .. tostring(rollId) .. ": " .. tostring(reason or "retrying")
+                .. "\n" .. tostring(State.latestSummary),
+            true
+        )
+    end
 
     task.delay(delaySeconds or Config.PickRetryDelay, function()
         if State.active
@@ -1154,8 +1345,11 @@ Handlers.roll = function(options, rollId)
                 and "Selecting NEW now."
                 or "Waiting for manual pick."
         ), true)
+        sendWebhook("Auto Amulet Target Hit", State.latestSummary, rollId, "ToggleWebhookOnTarget")
     elseif isAutoRolling() then
-        setStatus(State.latestSummary .. "\nMissed target. Keeping OLD now.", true)
+        if shouldShowAutoStatus() then
+            setStatus(State.latestSummary .. "\nMissed target. Keeping OLD now.", false)
+        end
     else
         setStatus(State.latestSummary, true)
     end
@@ -1190,6 +1384,12 @@ Handlers.pick = function(choice, rollId, ok, message)
                     .. "\n" .. tostring(State.latestSummary),
                 true
             )
+            sendWebhook(
+                "Auto Amulet Selected New",
+                "Selected NEW on roll " .. tostring(rollId) .. ".\n" .. tostring(State.latestSummary),
+                tostring(rollId) .. ":new",
+                "ToggleWebhookOnNewSelected"
+            )
             if Toggles.ToggleStopAfterAutoNew and Toggles.ToggleStopAfterAutoNew.Value then
                 setAutoRolling(false)
             else
@@ -1200,13 +1400,15 @@ Handlers.pick = function(choice, rollId, ok, message)
             if shouldHideVisuals() then
                 queueVisualCleanup()
             end
-            setStatus(
-                "Kept OLD. Rolls: " .. tostring(State.rolls)
-                    .. " | Kept: " .. tostring(State.keptOld)
-                    .. " | New: " .. tostring(State.selectedNew)
-                    .. "\n" .. tostring(State.latestSummary),
-                false
-            )
+            if shouldShowAutoStatus() then
+                setStatus(
+                    "Kept OLD. Rolls: " .. tostring(State.rolls)
+                        .. " | Kept: " .. tostring(State.keptOld)
+                        .. " | New: " .. tostring(State.selectedNew)
+                        .. "\n" .. tostring(State.latestSummary),
+                    false
+                )
+            end
             scheduleNextRoll(getRollDelay())
         end
         return
@@ -1259,9 +1461,9 @@ rollAmuletOnce = function()
 
     if State.rolls == 0 then
         setStatus("Rolling first amulet...", true)
-    elseif isAutoRolling() then
+    elseif isAutoRolling() and shouldShowAutoStatus() then
         setStatus("Rolling next amulet...\nLast:\n" .. tostring(State.latestSummary), false)
-    else
+    elseif not isAutoRolling() then
         setStatus("Rolling amulet...\nLast:\n" .. tostring(State.latestSummary), true)
     end
 
@@ -1293,7 +1495,7 @@ local function startAutoRoll()
     Tasks.AutoAmuletRoll = task.spawn(function()
         while State.active and isAutoRolling() do
             rollAmuletOnce()
-            task.wait(0.02)
+            task.wait(Config.AutoFallbackWait)
         end
         refreshVisualSuppression()
     end)
@@ -1484,6 +1686,14 @@ RollBox:AddSlider("AutoAmuletRollDelayMs", {
     Rounding = 0,
     Suffix = " ms",
 })
+RollBox:AddSlider("AutoAmuletStatusEvery", {
+    Text = "Status Every",
+    Min = 1,
+    Max = 50,
+    Default = 10,
+    Rounding = 0,
+    Suffix = " rolls",
+})
 RollBox:AddCheckbox("ToggleAmuletHideRollVisuals", {
     Text = "Hide Roll Cards/Animation",
     Default = true,
@@ -1494,6 +1704,22 @@ RollBox:AddCheckbox("ToggleAutoAmuletSelectNew", {
 })
 RollBox:AddCheckbox("ToggleStopAfterAutoNew", {
     Text = "Stop After Auto New",
+    Default = true,
+})
+RollBox:AddInput("WebhookUrlInput", {
+    Text = "Webhook URL",
+    Default = readGlobalString("AutoAmuletWebhook"),
+    Numeric = false,
+    AllowEmpty = true,
+    ClearTextOnFocus = false,
+    Placeholder = "https://discord.com/api/webhooks/...",
+})
+RollBox:AddCheckbox("ToggleWebhookOnTarget", {
+    Text = "Webhook On Target",
+    Default = true,
+})
+RollBox:AddCheckbox("ToggleWebhookOnNewSelected", {
+    Text = "Webhook On New",
     Default = true,
 })
 RollBox:AddCheckbox("ToggleAutoAmuletRoll", {
@@ -1516,6 +1742,21 @@ RollBox:AddButton({
     Text = "Keep Old",
     Func = function()
         pickLatestAmulet("OLD")
+    end,
+})
+RollBox:AddButton({
+    Text = "Test Webhook",
+    Func = function()
+        if sendWebhook(
+            "Auto Amulet Test",
+            "Webhook test from the standalone auto amulet script.",
+            "test-" .. tostring(os.clock()),
+            "ToggleWebhookOnTarget"
+        ) then
+            notify("Webhook test sent.")
+        else
+            notify("Webhook not sent. Check URL and toggle.")
+        end
     end,
 })
 RollBox:AddButton({
