@@ -66,6 +66,7 @@ local State = {
     pickSerial = 0,
     pickRetry = 0,
     pickChoice = nil,
+    choiceReadyAt = 0,
     targetLocked = false,
     latestOptions = nil,
     latestRollId = nil,
@@ -293,6 +294,10 @@ end
 
 local function getRollDelay()
     return math.max(0, getNumberOption("AutoAmuletRollDelayMs", 0) / 1000)
+end
+
+local function getPickDelay()
+    return math.max(0, getNumberOption("AutoAmuletPickDelayMs", 100) / 1000)
 end
 
 local function getStatusEvery()
@@ -1303,6 +1308,10 @@ pickLatestAmulet = function(choice, quiet)
 end
 
 local function handleReadyChoice()
+    if os.clock() < (State.choiceReadyAt or 0) then
+        return
+    end
+
     if State.latestTarget then
         if Toggles.ToggleAutoAmuletSelectNew and Toggles.ToggleAutoAmuletSelectNew.Value then
             pickLatestAmulet("NEW", true)
@@ -1328,6 +1337,7 @@ Handlers.roll = function(options, rollId)
     State.choicePending = true
     State.pickPending = false
     State.pickRetry = 0
+    State.choiceReadyAt = os.clock() + getPickDelay()
     State.latestOptions = options
     State.latestRollId = rollId
     State.rolls += 1
@@ -1357,7 +1367,14 @@ Handlers.roll = function(options, rollId)
     if shouldHideVisuals() then
         queueVisualCleanup()
     end
-    handleReadyChoice()
+    task.delay(getPickDelay(), function()
+        if State.active
+            and State.choicePending
+            and not State.pickPending
+            and tostring(State.latestRollId) == tostring(rollId) then
+            handleReadyChoice()
+        end
+    end)
 end
 
 Handlers.pick = function(choice, rollId, ok, message)
@@ -1418,6 +1435,34 @@ Handlers.pick = function(choice, rollId, ok, message)
     local text = tostring(message or "rejected")
     local lower = text:lower()
     local delaySeconds = lower:find("slow", 1, true) and Config.SlowRetryDelay or Config.PickRetryDelay
+
+    if pickChoice == "OLD" then
+        State.choicePending = false
+        State.targetLocked = false
+        State.latestTarget = nil
+        State.pickRetry = 0
+        if shouldShowAutoStatus() then
+            setStatus(
+                "Keep OLD was rejected on roll " .. tostring(rollId)
+                    .. ". Rolling again after " .. tostring(math.floor(delaySeconds * 1000 + 0.5)) .. " ms.\n"
+                    .. tostring(State.latestSummary),
+                true
+            )
+        end
+        scheduleNextRoll(delaySeconds)
+        return
+    end
+
+    if pickChoice == "NEW" and State.pickRetry >= 8 then
+        setStatus(
+            "Select NEW rejected too many times. Auto stopped so the target is not skipped.\n"
+                .. tostring(State.latestSummary),
+            true
+        )
+        setAutoRolling(false)
+        return
+    end
+
     retryPick(pickChoice ~= "" and pickChoice or State.pickChoice or "OLD", text, delaySeconds)
 end
 
@@ -1556,8 +1601,9 @@ local function showNextComboSlot()
 end
 
 local function createComboSlot(groupbox, index)
+    local defaultCombo = index == 1 and { "Summoner", "Corrupted" } or {}
     local slot = {
-        Active = false,
+        Active = index == 1,
         DropdownId = "AmuletCustomCombo" .. tostring(index),
     }
     Extra.ComboSlots[index] = slot
@@ -1567,7 +1613,7 @@ local function createComboSlot(groupbox, index)
         Values = AmuletTypeValues,
         Multi = true,
         AllowNull = true,
-        Default = {},
+        Default = defaultCombo,
     })
     slot.RemoveButton = groupbox:AddButton({
         Text = "Remove Combo " .. tostring(index),
@@ -1576,8 +1622,8 @@ local function createComboSlot(groupbox, index)
         end,
     })
 
-    slot.Dropdown:SetVisible(false)
-    slot.RemoveButton:SetVisible(false)
+    slot.Dropdown:SetVisible(slot.Active)
+    slot.RemoveButton:SetVisible(slot.Active)
     return slot
 end
 
@@ -1592,6 +1638,49 @@ local function restoreSavedComboSlots()
             end
         end
     end
+end
+
+local function hasAnyComboSelection()
+    for _, slot in ipairs(Extra.ComboSlots) do
+        if slot.Dropdown and typeof(slot.Dropdown.Value) == "table" then
+            for _, active in pairs(slot.Dropdown.Value) do
+                if active then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function setOptionValue(id, value)
+    local option = Options[id]
+    if option and typeof(option.SetValue) == "function" then
+        pcall(function()
+            option:SetValue(value)
+        end)
+    end
+end
+
+local function applyRecommendedTarget(force)
+    if not force and (hasSelectedValues("AmuletRequiredTypes") or hasAnyComboSelection() or hasMinimumStats()) then
+        return false
+    end
+
+    setOptionValue("AmuletOptionCounts", { "4" })
+    setOptionValue("AmuletMatchRule", "Count + Type/Combo OR Min Total")
+    setOptionValue("AmuletRequiredTypes", {})
+    setOptionValue("AmuletMinimumMode", "All Active Min Totals")
+    setOptionValue("AmuletMinCombinedSlimesInput", "0")
+    setOptionValue("AmuletMinCombinedExpInput", "400")
+    setOptionValue("AmuletMinCombinedGemsInput", "0")
+
+    for index = 2, Extra.ComboSlotLimit do
+        hideComboSlot(index)
+    end
+    showComboSlot(1)
+    setOptionValue("AmuletCustomCombo1", { "Summoner", "Corrupted" })
+    return true
 end
 
 pcall(function()
@@ -1641,6 +1730,13 @@ TargetBox:AddButton({
     Text = "Add Combo",
     Func = showNextComboSlot,
 })
+TargetBox:AddButton({
+    Text = "Use Recommended Target",
+    Func = function()
+        applyRecommendedTarget(true)
+        notify("Target set to 4 options, Summoner + Corrupted, or 400+ Exp.")
+    end,
+})
 for index = 1, Extra.ComboSlotLimit do
     createComboSlot(TargetBox, index)
 end
@@ -1660,7 +1756,7 @@ TargetBox:AddInput("AmuletMinCombinedSlimesInput", {
 })
 TargetBox:AddInput("AmuletMinCombinedExpInput", {
     Text = "Min Exp Total",
-    Default = "0",
+    Default = "400",
     Numeric = true,
     AllowEmpty = false,
     EmptyReset = "0",
@@ -1683,6 +1779,14 @@ RollBox:AddSlider("AutoAmuletRollDelayMs", {
     Min = 0,
     Max = 500,
     Default = 0,
+    Rounding = 0,
+    Suffix = " ms",
+})
+RollBox:AddSlider("AutoAmuletPickDelayMs", {
+    Text = "Pick Delay",
+    Min = 0,
+    Max = 300,
+    Default = 100,
     Rounding = 0,
     Suffix = " ms",
 })
@@ -1848,6 +1952,7 @@ SaveManager:LoadAutoloadConfig()
 State.loadingSettings = false
 
 restoreSavedComboSlots()
+applyRecommendedTarget(false)
 connectAmuletEvents()
 enableFastAmulets()
 refreshVisualSuppression()
