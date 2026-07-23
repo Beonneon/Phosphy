@@ -3614,7 +3614,7 @@ function Extra.stopBuffCombo()
     Extra.setBuffComboStatus("Buff combo is off.")
 end
 
-local AmuletCountValues = { "1", "2", "3", "4" }
+local AmuletCountValues = { "1", "2", "3", "4", "5" }
 
 local AmuletPreferredFields = {
     "rarity",
