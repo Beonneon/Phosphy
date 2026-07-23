@@ -5454,7 +5454,7 @@ CleanbotBox:AddButton({
 })
 CleanbotBox:AddCheckbox("ToggleAutoCleanbotRoll", {
     Text = "Auto Roll Cleanbot",
-    Default = true,
+    Default = false,
 })
 CleanbotBox:AddCheckbox("ToggleAutoBestCleanbot", {
     Text = "Auto Equip Best Cleanbot",
