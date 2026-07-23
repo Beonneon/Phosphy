@@ -5679,7 +5679,7 @@ function Extra.stopBuffCombo()
     Extra.setBuffComboStatus("Buff combo is off.")
 end
 
-local AmuletCountValues = { "1", "2", "3", "4" }
+local AmuletCountValues = { "1", "2", "3", "4", "5" }
 Extra.AmuletTypeValues = {
     "Void",
     "Titanic",
@@ -8287,7 +8287,7 @@ CleanbotBox:AddButton({
 })
 CleanbotBox:AddCheckbox("ToggleAutoCleanbotRoll", {
     Text = "Auto Roll Cleanbot",
-    Default = true,
+    Default = false,
 })
 CleanbotBox:AddCheckbox("ToggleAutoBestCleanbot", {
     Text = "Auto Equip Best Cleanbot",
